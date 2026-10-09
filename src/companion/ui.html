@@ -1,0 +1,474 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Night City Haptics</title>
+<style>
+:root{
+  --bg:#08090b;--panel:#101217;--panel2:#151820;--line:#252a33;--line2:#323844;
+  --text:#ecebe4;--muted:#8a909b;--dim:#5d636e;
+  --yellow:#f3e600;--cyan:#4ff0ff;--red:#ff3b55;--green:#39f5a0;
+  --head:"Rajdhani","Bahnschrift","DIN Alternate","Barlow Condensed","Roboto Condensed","Arial Narrow",sans-serif;
+  --body:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+  --mono:ui-monospace,"Cascadia Mono","JetBrains Mono",Consolas,monospace;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+html{background:var(--bg)}
+body{margin:0;color:var(--text);font:15px/1.45 var(--body);min-height:100vh;
+  background:
+    linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px) 0 0/100% 4px,
+    radial-gradient(1200px 500px at 85% -10%,rgba(79,240,255,.07),transparent 60%),
+    radial-gradient(900px 400px at -10% 0%,rgba(243,230,0,.05),transparent 60%),var(--bg)}
+.wrap{max-width:1080px;margin:0 auto;padding:22px 20px 60px}
+button,select,input{font:inherit;color:inherit}
+.clip{clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,14px 100%,0 calc(100% - 14px))}
+.h{font-family:var(--head);text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+
+/* header */
+header{display:flex;align-items:center;gap:14px;margin-bottom:20px}
+.logo{width:42px;height:42px;background:var(--yellow);color:#000;display:grid;place-items:center;
+  font:800 17px/1 var(--head);letter-spacing:.02em;clip-path:polygon(0 0,100% 0,100% 70%,70% 100%,0 100%)}
+.title{font:700 26px/1 var(--head);letter-spacing:.12em;text-transform:uppercase}
+.title b{color:var(--yellow);font-weight:700}
+.sub{color:var(--muted);font-size:12px;letter-spacing:.2em;text-transform:uppercase;font-family:var(--head);margin-top:3px}
+header .grow{flex:1}
+
+.btn{background:var(--panel2);border:1px solid var(--line2);padding:8px 14px;cursor:pointer;
+  font:700 13px/1 var(--head);letter-spacing:.12em;text-transform:uppercase;color:var(--text);
+  clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,8px 100%,0 calc(100% - 8px));transition:background .15s,border-color .15s}
+.btn:hover{background:#1d212b;border-color:var(--muted)}
+.btn.primary{background:var(--yellow);color:#000;border-color:var(--yellow)}
+.btn.primary:hover{background:#fff35a}
+.btn.ghost{background:transparent}
+.btn.danger:hover{border-color:var(--red);color:var(--red)}
+.btn:disabled{opacity:.35;cursor:default}
+.btn.small{padding:6px 10px;font-size:12px}
+
+/* status strip */
+.status{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
+.tile{background:var(--panel);border:1px solid var(--line);padding:14px 16px 14px 18px;position:relative;min-height:92px}
+.tile::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;background:var(--dim)}
+.tile.ok::before{background:var(--green);box-shadow:0 0 12px var(--green)}
+.tile.warn::before{background:var(--yellow);box-shadow:0 0 12px var(--yellow)}
+.tile.bad::before{background:var(--red);box-shadow:0 0 12px var(--red)}
+.tile .label{font:700 11px/1 var(--head);letter-spacing:.22em;color:var(--muted);text-transform:uppercase}
+.tile .value{font:700 19px/1.15 var(--head);letter-spacing:.04em;margin:7px 0 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .detail{color:var(--muted);font-size:13px}
+.tile .act{margin-top:9px}
+.pulse{animation:pulse 1.3s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.35}}
+
+/* hero */
+.hero{display:grid;grid-template-columns:auto 1fr 250px;gap:0;background:var(--panel);border:1px solid var(--line);margin-bottom:22px}
+.hero > div{padding:20px 22px}
+.hero > div + div{border-left:1px solid var(--line)}
+.power{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-width:170px}
+.powerbtn{width:96px;height:96px;border-radius:50%;border:2px solid var(--line2);background:radial-gradient(circle at 50% 40%,#1b1f27,#0d0f13);
+  cursor:pointer;display:grid;place-items:center;transition:all .2s;position:relative}
+.powerbtn svg{width:38px;height:38px;stroke:var(--dim);transition:stroke .2s}
+.powerbtn.on{border-color:var(--yellow);box-shadow:0 0 0 4px rgba(243,230,0,.08),0 0 28px rgba(243,230,0,.35)}
+.powerbtn.on svg{stroke:var(--yellow)}
+.powerlabel{font:700 13px/1 var(--head);letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
+.powerlabel.on{color:var(--yellow)}
+.meter{display:flex;flex-direction:column;gap:6px;min-width:0}
+.meter .top{display:flex;align-items:baseline;gap:12px}
+.big{font:700 54px/1 var(--head);letter-spacing:.02em;color:var(--cyan);text-shadow:0 0 18px rgba(79,240,255,.35);font-variant-numeric:tabular-nums;min-width:2.6em}
+.why{color:var(--muted);font-size:13px;min-height:1.3em;display:flex;flex-wrap:wrap;gap:6px}
+.chip{border:1px solid rgba(79,240,255,.35);color:var(--cyan);padding:1px 8px;font:600 12px/1.6 var(--head);letter-spacing:.08em;text-transform:uppercase}
+canvas{width:100%;height:70px;display:block}
+.master .label{font:700 11px/1 var(--head);letter-spacing:.22em;color:var(--muted);text-transform:uppercase}
+.master .num{font:700 34px/1 var(--head);margin:8px 0 10px;font-variant-numeric:tabular-nums}
+.master p{margin:10px 0 0;color:var(--muted);font-size:12.5px}
+
+/* sliders + switches */
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:22px;background:transparent;cursor:pointer;margin:0}
+input[type=range]::-webkit-slider-runnable-track{height:4px;background:linear-gradient(90deg,var(--yellow) var(--p,50%),var(--line2) var(--p,50%))}
+input[type=range]::-moz-range-track{height:4px;background:linear-gradient(90deg,var(--yellow) var(--p,50%),var(--line2) var(--p,50%))}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:18px;margin-top:-7px;background:var(--text);border:0;clip-path:polygon(0 0,100% 0,100% 75%,50% 100%,0 75%)}
+input[type=range]::-moz-range-thumb{width:12px;height:18px;background:var(--text);border:0;border-radius:0}
+input[type=range]:disabled{opacity:.3}
+.sw{position:relative;width:42px;height:22px;flex:none;cursor:pointer;display:inline-block}
+.sw input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
+.sw span{position:absolute;inset:0;border:1px solid var(--line2);background:#0c0e12;transition:.15s}
+.sw span::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;background:var(--dim);transition:.15s}
+.sw input:checked + span{border-color:var(--yellow);background:rgba(243,230,0,.12)}
+.sw input:checked + span::after{left:23px;background:var(--yellow)}
+.sw input:focus-visible + span{outline:2px solid var(--cyan);outline-offset:2px}
+select{background:#0c0e12;border:1px solid var(--line2);padding:6px 28px 6px 10px;cursor:pointer;-webkit-appearance:none;appearance:none;
+  background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
+  background-position:calc(100% - 14px) 50%,calc(100% - 9px) 50%;background-size:5px 5px;background-repeat:no-repeat;font-size:13.5px}
+select:disabled{opacity:.35}
+input[type=text]{background:#0c0e12;border:1px solid var(--line2);padding:8px 10px;width:100%;font-family:var(--mono);font-size:13px}
+
+/* tabs */
+.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:18px}
+.tab{background:none;border:0;padding:10px 16px;cursor:pointer;font:700 15px/1 var(--head);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--yellow);border-bottom-color:var(--yellow)}
+.tab .count{color:var(--dim);font-size:12px;margin-left:4px}
+.panel{display:none}.panel.active{display:block}
+
+/* interactions */
+.cat{margin-bottom:26px}
+.cathead{display:flex;align-items:center;gap:12px;margin-bottom:8px}
+.cathead .name{font:700 18px/1 var(--head);letter-spacing:.16em;text-transform:uppercase}
+.cathead .n{color:var(--dim);font:600 13px/1 var(--head);letter-spacing:.1em}
+.cathead .line{flex:1;height:1px;background:linear-gradient(90deg,var(--line2),transparent)}
+.rows{background:var(--panel);border:1px solid var(--line)}
+.row{display:grid;grid-template-columns:42px minmax(0,1fr) 150px 210px 64px;align-items:center;gap:16px;padding:12px 16px 12px 18px;position:relative;border-top:1px solid var(--line)}
+.row:first-child{border-top:0}
+.row .glow{position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--cyan);opacity:0;box-shadow:0 0 14px var(--cyan);transition:opacity .08s}
+.row.off .info,.row.off .ctrl{opacity:.42}
+.info .nm{font-weight:600}
+.info .ds{color:var(--muted);font-size:13px;margin-top:1px}
+.kind{font:700 10px/1 var(--head);letter-spacing:.16em;color:var(--dim);margin-left:8px;vertical-align:2px}
+.strength{display:flex;align-items:center;gap:10px}
+.strength output{font:600 14px/1 var(--mono);color:var(--muted);width:3.2em;text-align:right}
+.catbtns{display:flex;gap:6px}
+
+/* devices */
+.devices{display:grid;gap:12px}
+.dev{background:var(--panel);border:1px solid var(--line);padding:16px 18px;display:grid;grid-template-columns:42px minmax(0,1fr) 230px auto;gap:16px;align-items:center}
+.dev .nm{font:700 18px/1.1 var(--head);letter-spacing:.05em}
+.motors{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
+.motors span{font:600 11px/1.5 var(--head);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line2);padding:0 6px}
+.extra{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;margin-top:8px}
+.empty{background:var(--panel);border:1px dashed var(--line2);padding:26px;text-align:center;color:var(--muted)}
+.empty .h{color:var(--text);font-size:18px;margin-bottom:6px}
+.toolbar{display:flex;align-items:center;gap:12px;margin-bottom:14px;color:var(--muted);font-size:13.5px}
+
+/* settings */
+.cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);padding:18px}
+.card .h{font-size:15px;margin-bottom:10px;color:var(--yellow)}
+.card p{color:var(--muted);font-size:13.5px;margin:8px 0}
+.field{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:12px 0}
+code{font-family:var(--mono);font-size:12.5px;background:#0c0e12;border:1px solid var(--line);padding:1px 5px;color:var(--cyan);word-break:break-all}
+kbd{font:600 12px/1 var(--head);letter-spacing:.08em;border:1px solid var(--line2);padding:2px 6px;color:var(--text)}
+
+.toast{position:fixed;right:18px;bottom:18px;background:var(--panel2);border:1px solid var(--line2);border-left:3px solid var(--green);padding:10px 16px;font:700 13px/1 var(--head);letter-spacing:.12em;text-transform:uppercase;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}
+.toast.show{opacity:1;transform:none}
+.toast.err{border-left-color:var(--red)}
+.offline{position:fixed;inset:0;background:rgba(8,9,11,.92);display:none;place-items:center;text-align:center;z-index:5}
+.offline.show{display:grid}
+.offline .h{font-size:24px;color:var(--yellow)}
+.offline p{color:var(--muted)}
+.foot{margin-top:30px;color:var(--dim);font-size:12.5px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+
+@media (max-width:860px){
+  .status{grid-template-columns:1fr}
+  .hero{grid-template-columns:1fr}
+  .hero > div + div{border-left:0;border-top:1px solid var(--line)}
+  .power{flex-direction:row;justify-content:flex-start;gap:16px}
+  .powerbtn{width:64px;height:64px}
+  .row{grid-template-columns:42px minmax(0,1fr) 64px;row-gap:8px}
+  .row .feel{grid-column:2}
+  .row .strength{grid-column:2/4}
+  .row .trybtn{grid-row:1;grid-column:3}
+  .dev{grid-template-columns:42px minmax(0,1fr)}
+  .dev .strength,.dev .btn{grid-column:2}
+  .cards{grid-template-columns:1fr}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">NCH</div>
+    <div>
+      <div class="title">Night City <b>Haptics</b></div>
+      <div class="sub">Cyberpunk 2077 · Intiface · <span id="ver"></span></div>
+    </div>
+    <div class="grow"></div>
+    <button class="btn ghost danger" id="quit" title="Stop all devices and close the app">Quit</button>
+  </header>
+
+  <section class="status">
+    <div class="tile clip" id="t-link"><div class="label">Intiface</div><div class="value" id="link-v">…</div><div class="detail" id="link-d"></div><div class="act" id="link-a"></div></div>
+    <div class="tile clip" id="t-dev"><div class="label">Device</div><div class="value" id="dev-v">…</div><div class="detail" id="dev-d"></div><div class="act" id="dev-a"></div></div>
+    <div class="tile clip" id="t-game"><div class="label">Game</div><div class="value" id="game-v">…</div><div class="detail" id="game-d"></div></div>
+  </section>
+
+  <section class="hero clip">
+    <div class="power">
+      <button class="powerbtn" id="power" aria-label="Feedback on or off">
+        <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
+      </button>
+      <div class="powerlabel" id="powerlabel">Feedback</div>
+    </div>
+    <div class="meter">
+      <div class="top"><div class="big" id="out">0%</div><div class="why" id="why"></div></div>
+      <canvas id="spark" width="600" height="70" aria-label="Output over the last five seconds"></canvas>
+    </div>
+    <div class="master">
+      <div class="label">Max strength</div>
+      <div class="num" id="masterv">70%</div>
+      <input type="range" id="master" min="0" max="100" step="1">
+      <p>Nothing ever goes above this. Each interaction's strength is a share of it.</p>
+    </div>
+  </section>
+
+  <nav class="tabs" role="tablist">
+    <button class="tab active" data-tab="interactions">Interactions<span class="count" id="icount"></span></button>
+    <button class="tab" data-tab="devices">Devices<span class="count" id="dcount"></span></button>
+    <button class="tab" data-tab="settings">Settings</button>
+  </nav>
+
+  <section class="panel active" id="p-interactions"></section>
+
+  <section class="panel" id="p-devices">
+    <div class="toolbar"><button class="btn" id="scan">Scan for devices</button><span id="scanstate"></span></div>
+    <div class="devices" id="devlist"></div>
+  </section>
+
+  <section class="panel" id="p-settings">
+    <div class="cards">
+      <div class="card clip">
+        <div class="h">Intiface</div>
+        <div class="field"><span>Start Intiface Engine automatically when no Intiface app is running</span><label class="sw"><input type="checkbox" id="autostart"><span></span></label></div>
+        <p>Address</p>
+        <input type="text" id="address" spellcheck="false">
+        <p id="enginepath"></p>
+        <div class="catbtns"><button class="btn small" id="reconnect">Reconnect</button><button class="btn small" id="download">Download Intiface Engine</button></div>
+      </div>
+      <div class="card clip">
+        <div class="h">In game</div>
+        <p>Open the CET overlay for a small Night City Haptics window with <b>Pause</b> and <b>Test buzz</b>.</p>
+        <p>For hotkeys, bind <kbd>Pause / resume haptics</kbd> and <kbd>Test buzz</kbd> under CET → Bindings.</p>
+        <p>Output only flows during gameplay: menus, pause, loading screens, photo mode and the CET overlay are always silent.</p>
+      </div>
+      <div class="card clip">
+        <div class="h">Defaults</div>
+        <p>Put every interaction back to its default on/off, strength and feel. Device settings and Intiface options stay.</p>
+        <button class="btn small danger" id="reset">Reset interactions</button>
+      </div>
+      <div class="card clip">
+        <div class="h">For mod authors</div>
+        <p>Other CET mods can send a pulse through the <b>Other mods</b> interaction:</p>
+        <p><code>GetMod("nightCityHaptics").Pulse(0.8, 2)</code></p>
+        <p>Strength 0–1, length in seconds (optional).</p>
+      </div>
+    </div>
+  </section>
+
+  <div class="foot"><span>Settings save automatically.</span><span>Close this tab any time — the app keeps running until you press Quit.</span></div>
+</div>
+<div class="toast" id="toast"></div>
+<div class="offline" id="offline"><div><div class="h">Night City Haptics is not running</div><p>Start it again: <b>start.cmd</b> (Windows) or <b>start.sh</b> (Linux) in the mod's companion folder, or your shortcut.</p></div></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let S = null, catalog = null, failures = 0, editing = new Set();
+const pct = v => Math.round(v * 100) + '%';
+
+async function api(path, body) {
+  const res = await fetch('/api/' + path, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-NCH': '1'}, body: JSON.stringify(body || {})});
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) { toast(data.error || 'Something went wrong', true); throw new Error(data.error); }
+  return data;
+}
+let toastTimer;
+function toast(text, err) {
+  const t = $('toast'); t.textContent = text; t.className = 'toast show' + (err ? ' err' : '');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = 'toast', 1600);
+}
+const timers = {};
+function save(change, key, delay = 0) {
+  clearTimeout(timers[key]);
+  timers[key] = setTimeout(() => api('settings', change).then(() => toast('Saved')).catch(() => {}), delay);
+}
+function fill(range) { range.style.setProperty('--p', (range.value - range.min) / (range.max - range.min) * 100 + '%'); }
+function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
+function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function sw(checked, onchange) {
+  const l = el('label', 'sw'); const i = el('input'); i.type = 'checkbox'; i.checked = checked;
+  i.addEventListener('change', () => onchange(i.checked)); l.append(i, el('span')); return l;
+}
+function range(value, onchange, key) {
+  const r = el('input'); r.type = 'range'; r.min = 0; r.max = 100; r.step = 1; r.value = Math.round(value * 100); fill(r);
+  r.addEventListener('pointerdown', () => editing.add(key));
+  r.addEventListener('pointerup', () => setTimeout(() => editing.delete(key), 600));
+  r.addEventListener('input', () => { fill(r); onchange(r.value / 100); });
+  return r;
+}
+
+// ---- interactions ----
+const rows = {};
+function buildInteractions() {
+  const root = $('p-interactions'); root.replaceChildren();
+  for (const cat of catalog.categories) {
+    const items = catalog.interactions.filter(i => i.category === cat.id);
+    const box = el('div', 'cat');
+    const head = el('div', 'cathead');
+    const n = el('span', 'n');
+    const btns = el('div', 'catbtns');
+    const all = el('button', 'btn small ghost', 'All on'), none = el('button', 'btn small ghost', 'All off');
+    const setAll = on => { const change = {}; items.forEach(i => change[i.id] = {on}); api('settings', {interactions: change}).then(() => toast('Saved')); };
+    all.onclick = () => setAll(true); none.onclick = () => setAll(false);
+    btns.append(all, none);
+    head.append(el('span', 'name', esc(cat.label)), n, el('span', 'line'), btns);
+    const list = el('div', 'rows clip');
+    for (const item of items) {
+      const r = rows[item.id] = {item, count: n, cat: items};
+      const row = r.row = el('div', 'row');
+      r.glow = el('div', 'glow');
+      r.sw = sw(false, on => save({interactions: {[item.id]: {on}}}, item.id + 'on'));
+      const info = el('div', 'info', `<div class="nm">${esc(item.label)}<span class="kind">${item.kind === 'level' ? 'WHILE ACTIVE' : 'ON EVENT'}</span></div><div class="ds">${esc(item.description)}</div>`);
+      const feel = r.feel = el('select', 'feel ctrl');
+      for (const f of catalog.feels[item.kind]) feel.append(new Option(f.label, f.id));
+      feel.onchange = () => save({interactions: {[item.id]: {feel: feel.value}}}, item.id + 'feel');
+      const st = el('div', 'strength ctrl');
+      r.out = el('output');
+      r.range = range(0, v => { r.out.textContent = pct(v); save({interactions: {[item.id]: {strength: v}}}, item.id + 'str', 250); }, item.id);
+      st.append(r.range, r.out);
+      r.try = el('button', 'btn small trybtn', 'Try');
+      r.try.title = 'Play this on your device now';
+      r.try.onclick = () => api('try', {id: item.id});
+      row.append(r.glow, r.sw, info, feel, st, r.try);
+      list.append(row);
+    }
+    box.append(head, list); root.append(box);
+  }
+}
+function updateInteractions() {
+  let on = 0;
+  const counts = new Map();
+  for (const [id, r] of Object.entries(rows)) {
+    const s = S.settings.interactions[id];
+    if (s.on) on++;
+    counts.set(r.count, (counts.get(r.count) || 0) + (s.on ? 1 : 0));
+    r.row.classList.toggle('off', !s.on);
+    r.sw.firstChild.checked = s.on;
+    if (document.activeElement !== r.feel) r.feel.value = s.feel;
+    if (!editing.has(id)) { r.range.value = Math.round(s.strength * 100); fill(r.range); r.out.textContent = pct(s.strength); }
+    const c = (S.contributions[id] || 0) + (S.contributions['try:' + id] || 0);
+    r.glow.style.opacity = Math.min(1, c / Math.max(.05, S.settings.max_strength) * 1.4);
+    r.try.disabled = !S.settings.enabled;
+  }
+  for (const [n, c] of counts) n.textContent = c + ' / ' + [...Object.values(rows)].filter(r => r.count === n).length + ' on';
+  $('icount').textContent = on + '/' + catalog.interactions.length;
+}
+
+// ---- devices ----
+let deviceKeys = '';
+function updateDevices() {
+  const list = $('devlist');
+  const keys = S.devices.map(d => d.key + d.motors.join()).join('|');
+  if (keys !== deviceKeys) {
+    deviceKeys = keys; list.replaceChildren();
+    if (!S.devices.length) {
+      const e = el('div', 'empty clip');
+      e.innerHTML = '<div class="h">No device connected</div>Turn your device on and put it in pairing mode, then press <b>Scan for devices</b>.<br>Bluetooth needs to be on. Anything Intiface supports works — see <code>iostindex.com</code> for the list.';
+      list.append(e);
+    }
+    for (const d of S.devices) {
+      const card = el('div', 'dev clip');
+      const set = d.settings;
+      const info = el('div', '', `<div class="nm">${esc(d.name)}</div>`);
+      const motors = el('div', 'motors'); d.motors.forEach(m => motors.append(el('span', '', esc(m)))); info.append(motors);
+      if (d.extra_motors) {
+        const x = el('label', 'extra'); x.append(sw(set.all_motors, v => save({devices: {[d.key]: {all_motors: v}}}, d.key + 'm')), document.createTextNode('Also drive the non-vibration motors'));
+        info.append(x);
+      }
+      const st = el('div', 'strength'); const out = el('output'); out.textContent = pct(set.strength);
+      st.append(range(set.strength, v => { out.textContent = pct(v); save({devices: {[d.key]: {strength: v}}}, d.key + 's', 250); }, 'dev' + d.key), out);
+      const test = el('button', 'btn small', 'Test'); test.onclick = () => api('test-device', {key: d.key});
+      card.append(sw(set.on, v => save({devices: {[d.key]: {on: v}}}, d.key + 'on')), info, st, test);
+      list.append(card);
+    }
+  }
+  $('dcount').textContent = S.devices.length || '';
+  $('scan').disabled = S.link !== 'connected' || S.scanning;
+  $('scanstate').innerHTML = S.scanning ? '<span class="pulse">Scanning… put your device in pairing mode</span>' : (S.link !== 'connected' ? 'Waiting for Intiface' : '');
+}
+
+// ---- status ----
+function tile(id, cls, value, detail, action) {
+  $('t-' + id).className = 'tile clip ' + cls;
+  $(id + '-v').textContent = value; $(id + '-d').textContent = detail;
+  if (action !== undefined) { const a = $(id + '-a'); if (a.dataset.k !== (action ? action.k : '')) { a.dataset.k = action ? action.k : ''; a.replaceChildren(); if (action) a.append(action.node()); } }
+}
+function button(label, fn, primary) { return () => { const b = el('button', 'btn small' + (primary ? ' primary' : ''), label); b.onclick = fn; return b; }; }
+function updateStatus() {
+  const L = {connected: ['ok', 'Connected'], starting: ['warn', 'Starting'], connecting: ['warn', 'Connecting'], missing: ['bad', 'Not installed'], error: ['bad', 'Not found']}[S.link] || ['warn', S.link];
+  let act = null;
+  if (S.link === 'missing') act = {k: 'dl', node: button('Download Intiface Engine', () => api('download-engine'), true)};
+  else if (S.link === 'error') act = {k: 'retry', node: button('Retry', () => api('reconnect'))};
+  tile('link', L[0], L[1], S.engine_download || S.link_detail, act);
+  if (S.devices.length) tile('dev', 'ok', S.devices.map(d => d.name).join(', '), S.devices.length > 1 ? S.devices.length + ' devices' : 'Ready', null);
+  else if (S.scanning) tile('dev', 'warn', 'Scanning…', 'Put your device in pairing mode', null);
+  else tile('dev', S.link === 'connected' ? 'bad' : '', 'None', S.link === 'connected' ? 'Turn it on, then scan' : 'Waiting for Intiface',
+    S.link === 'connected' ? {k: 'scan', node: button('Scan', () => api('scan'), true)} : null);
+  const G = {live: ['ok', 'Live'], idle: ['warn', 'Connected'], paused: ['warn', 'Paused'], offline: ['', 'Not running'], waiting: ['', 'Waiting']}[S.game] || ['', S.game];
+  tile('game', G[0], G[1], S.game_detail);
+  const on = S.settings.enabled;
+  $('power').classList.toggle('on', on); $('powerlabel').classList.toggle('on', on);
+  $('powerlabel').textContent = on ? 'Feedback on' : 'Feedback off';
+  $('out').textContent = pct(S.output);
+  if (!editing.has('master')) { $('master').value = Math.round(S.settings.max_strength * 100); fill($('master')); $('masterv').textContent = pct(S.settings.max_strength); }
+  const why = Object.entries(S.contributions).sort((a, b) => b[1] - a[1]).slice(0, 4);
+  $('why').replaceChildren(...why.map(([id]) => { const key = id.replace(/^try:/, ''); const item = rows[key]; return el('span', 'chip', esc(item ? item.item.label : (key === 'test' ? 'Test buzz' : key))); }));
+  if (!why.length) $('why').append(document.createTextNode(on ? (S.game === 'live' ? 'Quiet — play and it reacts' : 'Press Try on any interaction to feel it') : 'Feedback is off'));
+  if (document.activeElement !== $('address')) $('address').value = S.settings.intiface_address;
+  $('autostart').checked = S.settings.start_intiface;
+  $('enginepath').textContent = S.engine_path ? 'Engine: ' + S.engine_path : 'Intiface Engine is not installed. Download it, or start Intiface Central yourself.';
+  $('download').style.display = S.engine_path ? 'none' : '';
+  $('ver').textContent = 'v' + S.version;
+}
+function drawSpark() {
+  const c = $('spark'), g = c.getContext('2d'), w = c.width = c.clientWidth * devicePixelRatio, h = c.height = c.clientHeight * devicePixelRatio;
+  g.clearRect(0, 0, w, h);
+  g.strokeStyle = 'rgba(255,255,255,.06)'; g.lineWidth = 1;
+  for (const y of [.25, .5, .75]) { g.beginPath(); g.moveTo(0, h * y); g.lineTo(w, h * y); g.stroke(); }
+  const cap = S.settings.max_strength;
+  g.setLineDash([4 * devicePixelRatio, 4 * devicePixelRatio]); g.strokeStyle = 'rgba(243,230,0,.45)';
+  g.beginPath(); g.moveTo(0, h - cap * (h - 4) - 2); g.lineTo(w, h - cap * (h - 4) - 2); g.stroke(); g.setLineDash([]);
+  const pts = S.history, n = 150;
+  if (!pts.length) return;
+  const x = i => (i + n - pts.length) / (n - 1) * w, y = v => h - v * (h - 4) - 2;
+  const grad = g.createLinearGradient(0, 0, 0, h); grad.addColorStop(0, 'rgba(79,240,255,.35)'); grad.addColorStop(1, 'rgba(79,240,255,0)');
+  g.beginPath(); g.moveTo(x(0), h); pts.forEach((v, i) => g.lineTo(x(i), y(v))); g.lineTo(x(pts.length - 1), h); g.fillStyle = grad; g.fill();
+  g.beginPath(); pts.forEach((v, i) => i ? g.lineTo(x(i), y(v)) : g.moveTo(x(i), y(v)));
+  g.strokeStyle = '#4ff0ff'; g.lineWidth = 2 * devicePixelRatio; g.shadowColor = '#4ff0ff'; g.shadowBlur = 8; g.stroke(); g.shadowBlur = 0;
+}
+
+async function poll() {
+  try {
+    const res = await fetch('/api/state', {headers: catalog ? {} : {'X-NCH-Catalog': '1'}});
+    S = await res.json();
+    if (!catalog) { catalog = S.catalog; buildInteractions(); }
+    failures = 0; $('offline').classList.remove('show');
+    updateStatus(); updateInteractions(); updateDevices(); drawSpark();
+  } catch (e) {
+    if (++failures > 8) $('offline').classList.add('show');
+  }
+  setTimeout(poll, document.hidden ? 1000 : 100);
+}
+
+// ---- wiring ----
+function openTab(name) {
+  const tab = document.querySelector(`.tab[data-tab="${name}"]`) || document.querySelector('.tab');
+  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === tab));
+  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'p-' + tab.dataset.tab));
+}
+document.querySelectorAll('.tab').forEach(t => t.onclick = () => { history.replaceState(null, '', '#' + t.dataset.tab); openTab(t.dataset.tab); });
+openTab(location.hash.slice(1));
+$('power').onclick = () => api('settings', {enabled: !S.settings.enabled}).then(() => toast(S.settings.enabled ? 'Feedback off' : 'Feedback on'));
+const m = $('master');
+m.addEventListener('pointerdown', () => editing.add('master'));
+m.addEventListener('pointerup', () => setTimeout(() => editing.delete('master'), 600));
+m.addEventListener('input', () => { fill(m); $('masterv').textContent = m.value + '%'; save({max_strength: m.value / 100}, 'master', 200); });
+$('scan').onclick = () => api('scan');
+$('reconnect').onclick = () => api('reconnect').then(() => toast('Reconnecting'));
+$('download').onclick = () => api('download-engine');
+$('autostart').onchange = e => save({start_intiface: e.target.checked}, 'auto');
+$('address').onchange = e => save({intiface_address: e.target.value.trim()}, 'addr');
+$('reset').onclick = () => { if (confirm('Reset every interaction to its default?')) api('reset').then(() => toast('Defaults restored')); };
+$('quit').onclick = () => { if (confirm('Stop all devices and close Night City Haptics?')) api('quit').then(() => setTimeout(() => $('offline').classList.add('show'), 600)); };
+poll();
+</script>
+</body>
+</html>

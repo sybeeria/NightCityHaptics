@@ -1,0 +1,12 @@
+/.venv/
+/.build/
+/reports/
+/dist/staging/
+__pycache__/
+*.py[cod]
+settings.json
+state.json
+status.json
+*.log
+.env
+.env.*

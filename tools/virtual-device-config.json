@@ -1,0 +1,53 @@
+{
+  "version": {
+    "major": 5,
+    "minor": 57
+  },
+  "user_configs": {
+    "protocols": {
+      "lovense": {
+        "communication": [
+          {
+            "websocket": {
+              "name": "NCHVirtual"
+            }
+          }
+        ],
+        "configurations": []
+      }
+    },
+    "devices": [
+      {
+        "identifier": {
+          "protocol": "lovense",
+          "identifier": "Z",
+          "address": "NCHSIM000001"
+        },
+        "config": {
+          "id": "9a4f434c-4d63-4bf4-ab26-47c1b9bf929b",
+          "base_id": "37642e1c-a416-44d3-bada-76b6d9e245c9",
+          "features": [
+            {
+              "id": "33e274f1-0f5e-4de9-b65a-c636d2cee5c8",
+              "base_id": "3f7a25a5-df21-42ca-bf9f-d1c52df1f37e",
+              "output": {
+                "vibrate": {
+                  "disabled": false
+                }
+              }
+            },
+            {
+              "id": "191e8b80-0045-4272-9399-cb705d0e2d02",
+              "base_id": "14bd7637-13ed-49ba-9eb9-9c8ba9abec20"
+            }
+          ],
+          "user_config": {
+            "allow": false,
+            "deny": false,
+            "index": 0
+          }
+        }
+      }
+    ]
+  }
+}

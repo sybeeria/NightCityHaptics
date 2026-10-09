@@ -115,6 +115,7 @@ class Engine:
         if not path or self.running():
             return False
         arguments = [str(path), "--websocket-port", str(port), "--server-name", "Night City Haptics",
+                     "--max-ping-time", "3000",
                      "--use-bluetooth-le", "--use-serial", "--use-lovense-dongle-hid",
                      "--use-lovense-dongle-serial", "--log", "info"]
         self.log = open(data_dir() / "intiface-engine.log", "ab")
@@ -132,6 +133,9 @@ class Engine:
             except subprocess.TimeoutExpired:
                 self.process.kill()
         self.process = None
+        if self.log:
+            self.log.close()
+            self.log = None
 
     def download(self):
         """Fetch the official release for this platform and check its SHA-256."""
@@ -182,6 +186,7 @@ class App:
         self.outputs = buttplug.Outputs()
         self.engine = Engine()
         self.client = None
+        self.device_errors = []
         self.link = "connecting"       # connecting | starting | connected | missing | error
         self.link_detail = ""
         self.next_connect = 0.
@@ -191,32 +196,42 @@ class App:
         self.started_engine_at = None
         self.history = []              # recent (time, output) samples for the page
         self.status_written = (None, 0.)  # (content, time) of the last status.json
+        self.status_heartbeat = 0
+        self.scene_key = None
         self.stopping = False
         self.output = 0.
 
     # settings ---------------------------------------------------------------
     def save(self, changes):
         with self.lock:
+            if not isinstance(changes, dict):
+                raise ValueError("Settings must be an object")
             merged = json.loads(json.dumps(self.settings))
             for key, value in changes.items():
-                if key in ("interactions", "devices") and isinstance(value, dict):
+                if key in ("interactions", "devices"):
+                    if not isinstance(value, dict):
+                        raise ValueError(key + " must be an object")
                     for name, options in value.items():
-                        if isinstance(options, dict):
-                            merged[key].setdefault(name, {}).update(options)
+                        if not isinstance(name, str) or not isinstance(options, dict):
+                            raise ValueError(key + " entries must be named objects")
+                        merged[key].setdefault(name, {}).update(options)
                 else:
                     merged[key] = value
-            address_changed = merged.get("intiface_address") != self.settings["intiface_address"]
-            self.settings = haptics.normalize_settings(merged, self.catalog)
-            write_json(self.settings_path, self.settings)
+            settings = haptics.normalize_settings(merged, self.catalog)
+            address_changed = settings["intiface_address"] != self.settings["intiface_address"]
+            # A rejected disk write must not silently change live output limits.
+            write_json(self.settings_path, settings)
+            self.settings = settings
             if address_changed:
                 self.disconnect("Address changed")
                 self.next_connect = 0.
 
     def reset(self):
         with self.lock:
-            keep = {k: self.settings[k] for k in ("intiface_address", "start_intiface", "devices")}
-            self.settings = haptics.normalize_settings(keep, self.catalog)
-            write_json(self.settings_path, self.settings)
+            settings = json.loads(json.dumps(self.settings))
+            settings["interactions"] = haptics.default_settings(self.catalog)["interactions"]
+            write_json(self.settings_path, settings)
+            self.settings = settings
 
     # Intiface connection --------------------------------------------------------
     def port(self):
@@ -227,13 +242,21 @@ class App:
 
     def disconnect(self, reason):
         if self.client:
+            self.device_errors = (self.device_errors + list(self.client.errors))[-5:]
             try:
                 self.client.stop_all()
-                self.client.close()
             except Exception:
                 pass
+            finally:
+                try:
+                    self.client.close()
+                except Exception:
+                    pass
         self.client = None
         self.outputs.reset()
+        self.mixer.clear()
+        self.output = 0.
+        self.scene_key = None
         self.link, self.link_detail = "connecting", reason
 
     def connect(self, now):
@@ -289,6 +312,8 @@ class App:
                     self.mixer.game_event(name, magnitude, now, rule["feel"], seconds)
             if not active:
                 self.mixer.clear(keep=("try:", "test"))
+            else:
+                self.sync_scene(now)
             output, _ = self.mixer.tick(now, self.game.levels(now), self.settings)
             self.output = output
             self.history.append(round(output, 3))
@@ -311,17 +336,62 @@ class App:
         """True while anything could need a fast tick: a live game or sound still playing."""
         return self.game.live(now) or bool(self.mixer.voices) or self.output > 0
 
+    def sync_scene(self, now):
+        """Restore the current scene at CET's simulation-time offset after a gate.
+
+        Heartbeats before this protocol addition still use event-only playback.
+        A scene is keyed by session and encounter, never by permanent quest facts.
+        """
+        if "scene" not in self.game.state:
+            return
+        scene = self.game.state["scene"]
+        if scene is None:
+            if self.scene_key is not None:
+                self.mixer.release("romance", now)
+            self.scene_key = None
+            return
+        key = (self.game.session, scene["instance"], scene["name"])
+        rule = self.settings["interactions"]["romance"]
+        track = "track:" + scene["name"]
+        feel = track if rule["feel"] == "scene" else rule["feel"]
+        effect = self.mixer.effects.get(feel)
+        if track not in self.mixer.effects or not effect:
+            self.scene_key = key
+            return
+        # CET elapsed measures simulation time at the accepted heartbeat. Let
+        # it advance between reads, then realign when the next sequence arrives.
+        start = self.game.changed - scene["elapsed"]
+        if now - start > effect["points"][-1][0]:
+            # A heartbeat still describing the same long encounter must never
+            # restart a shorter custom/legacy envelope that already finished.
+            self.mixer.voices.pop("romance", None)
+            self.scene_key = key
+            return
+        voice = self.mixer.voices.get("romance")
+        if self.scene_key != key or not voice or voice.get("feel") != feel:
+            pulse = self.mixer.voices.get("romance#pulse")
+            if self.scene_key != key and pulse and pulse["start"] < self.game.changed:
+                self.mixer.voices.pop("romance#pulse", None)
+            self.mixer.voices["romance"] = {"start": start, "magnitude": 1., "feel": feel, "scale": 1.}
+        elif "release" not in voice:
+            voice["start"] = start
+        self.scene_key = key
+
     def write_status(self, now):
         # The overlay reads this; CET treats it as fresh for 3 s, so unchanged content is
         # rewritten once a second rather than five times.
         devices = [buttplug.summary(d)["name"] for d in self.client.devices.values()] if self.client else []
         status = {"v": 2, "running": not self.stopping, "link": self.link, "devices": devices,
-                  "output": round(self.output, 2), "enabled": self.settings["enabled"]}
+                  "output": round(self.output, 2), "enabled": self.settings["enabled"],
+                  "active": self.game.active(now),
+                  "contributions": {name: round(value, 2) for name, value in self.mixer.contributions.items()}}
         content, written = self.status_written
         if status == content and now - written < 1:
             return
         try:
-            write_json(self.mod_dir / "status.json", status)
+            heartbeat = self.status_heartbeat + 1
+            write_json(self.mod_dir / "status.json", dict(status, heartbeat=heartbeat))
+            self.status_heartbeat = heartbeat
             self.status_written = (status, now)
         except OSError:
             pass
@@ -333,13 +403,14 @@ class App:
             devices = []
             for device in (self.client.devices.values() if self.client else []):
                 info = buttplug.summary(device)
-                info["settings"] = self.settings["devices"].get(info["key"], {"on": True, "strength": 1., "all_motors": False})
+                info["settings"] = dict({"on": True, "strength": 1., "all_motors": False},
+                                        **buttplug.device_options(device, self.settings["devices"]))
                 devices.append(info)
             return {"version": VERSION, "settings": self.settings, "output": self.output,
                     "contributions": dict(self.mixer.contributions), "history": self.history[-150:],
                     "link": self.link, "link_detail": self.link_detail,
                     "scanning": bool(self.client and self.client.scanning), "devices": devices,
-                    "device_errors": list(self.client.errors) if self.client else [],
+                    "device_errors": (self.device_errors + (list(self.client.errors) if self.client else []))[-5:],
                     "game": game, "game_detail": game_detail,
                     "engine_path": str(self.engine.executable() or ""), "engine_download": self.engine.download_state}
 
@@ -366,8 +437,8 @@ class App:
             if not self.client:
                 raise ValueError("Intiface is not connected")
             for index, device in self.client.devices.items():
-                if device.get("DeviceName") == key:
-                    strength = self.settings["devices"].get(key, {}).get("strength", 1.)
+                if buttplug.summary(device)["key"] == key:
+                    strength = buttplug.device_options(device, self.settings["devices"]).get("strength", 1.)
                     self.outputs.hold[index] = (round(.5 * strength, 3), time.monotonic() + .8)
                     return
         raise ValueError("Device not found")
@@ -378,8 +449,12 @@ class App:
             try:
                 self.tick(started)
             except Exception:
-                logging.exception("Unexpected error; output stopped for this tick")
-                self.output = 0.
+                logging.exception("Unexpected error; stopping devices and disconnecting")
+                with self.lock:
+                    self.disconnect("Unexpected processing error; devices stopped")
+                    self.game = haptics.GameLink()
+                    self.next_connect = started + 1
+                    self.write_status(started)
             period = TICK if self.busy(started) else IDLE_TICK
             time.sleep(max(0., period - (time.monotonic() - started)))
         with self.lock:
@@ -387,7 +462,9 @@ class App:
             self.engine.stop()
             try:
                 write_json(self.mod_dir / "status.json", {"v": 2, "running": False, "link": "stopped",
-                                                         "devices": [], "output": 0, "enabled": False})
+                                                         "devices": [], "output": 0, "enabled": False,
+                                                         "active": False, "contributions": {},
+                                                         "heartbeat": self.status_heartbeat + 1})
             except OSError:
                 pass
 
@@ -450,6 +527,8 @@ def make_server(app, port):
                 return self.reply(403, {"error": "Rejected"})
             try:
                 body = json.loads(data or b"{}")
+                if not isinstance(body, dict):
+                    raise ValueError("Request body must be an object")
                 action = self.path.rsplit("/", 1)[-1]
                 if action == "settings":
                     app.save(body)

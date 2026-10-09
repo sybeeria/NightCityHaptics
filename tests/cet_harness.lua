@@ -1,4 +1,4 @@
--- Run: luajit tests/cet_harness.lua   (from the mod workshop folder)
+-- Run: luajit tests/cet_harness.lua   (from the repository root)
 -- Drives the real CET init.lua with stubbed CET/game APIs and in-memory files.
 local root = arg[0]:gsub("/?tests/cet_harness.lua$", "")
 if root == "" then root = "." end
@@ -12,7 +12,11 @@ end
 local function encode(value)
   local kind = type(value)
   if kind == "nil" then return "null" end
-  if kind == "boolean" or kind == "number" then return tostring(value) end
+  if kind == "number" then
+    assert(value == value and value ~= math.huge and value ~= -math.huge, "JSON rejects nonfinite numbers")
+    return tostring(value)
+  end
+  if kind == "boolean" then return tostring(value) end
   if kind == "string" then
     return '"' .. value:gsub('[\\"%z\1-\31]', function(c)
       local special = {['"'] = '\\"', ['\\'] = '\\\\', ['\n'] = '\\n', ['\r'] = '\\r', ['\t'] = '\\t'}
@@ -20,7 +24,9 @@ local function encode(value)
     end) .. '"'
   end
   assert(kind == "table", "cannot encode " .. kind)
-  local keys, array = {}, #value > 0
+  -- CET's JSON binding serializes an empty Lua table as [], including levels
+  -- and the cleared scene object; consumers must treat an empty collection as absent.
+  local keys, array = {}, true
   for key in pairs(value) do keys[#keys + 1] = key; if type(key) ~= "number" then array = false end end
   local parts = {}
   if array then for index = 1, #value do parts[#parts + 1] = encode(value[index]) end; return '[' .. table.concat(parts, ',') .. ']' end
@@ -96,15 +102,15 @@ local function state() return json.decode(files["state.json"]) end
 -- Enums: Enum.new(type, name) -> ordinal, as CET's EnumInt returns.
 local enums = {
   gamePSMLocomotionStates = {"Default", "Crouch", "Sprint", "Kereznikov", "Jump", "Vault", "Dodge", "DodgeAir", "Workspot", "Slide", "SlideFall", "CrouchSprint", "CrouchDodge"},
-  gamePSMDetailedLocomotionStates = {"NotInBaseLocomotion", "Stand", "AimWalk", "Crouch", "Sprint", "Slide", "SlideFall", "Dodge", "Climb", "Vault", "Ladder", "LadderSprint", "LadderSlide", "LadderJump", "Fall", "AirThrusters", "AirHover", "SuperheroFall", "Jump", "DoubleJump", "ChargeJump", "HoverJump", "DodgeAir", "RegularLand", "HardLand", "VeryHardLand", "DeathLand", "SuperheroLand"},
+  gamePSMDetailedLocomotionStates = {"NotInBaseLocomotion", "Stand", "AimWalk", "Crouch", "Sprint", "Slide", "SlideFall", "Dodge", "Climb", "Vault", "Ladder", "LadderSprint", "LadderSlide", "LadderJump", "Fall", "AirThrusters", "AirHover", "SuperheroFall", "Jump", "DoubleJump", "ChargeJump", "HoverJump", "DodgeAir", "RegularLand", "HardLand", "VeryHardLand", "DeathLand", "SuperheroLand", "SuperheroLandRecovery", "Knockdown", "CrouchSprint", "Felled"},
   gamePSMLandingState = {"Default", "RegularLand", "HardLand", "VeryHardLand", "DeathLand", "SuperheroLand", "SuperheroLandRecovery"},
-  gamePSMMeleeWeapon = {"NotReady", "Equipping", "Idle", "Safe", "PublicSafe", "Parried", "Hold", "ChargedHold", "Block", "Targeting", "Deflect", "ComboAttack", "FinalAttack", "StrongAttack"},
+  gamePSMMeleeWeapon = {"NotReady", "Equipping", "Idle", "Safe", "PublicSafe", "Parried", "Hold", "ChargedHold", "Block", "Targeting", "Deflect", "ComboAttack", "FinalAttack", "StrongAttack", "SafeAttack", "BlockAttack", "SprintAttack", "CrouchAttack", "JumpAttack", "ThrowAttack", "DeflectAttack", "EquipAttack", "Default"},
   gamePSMTakedown = {"Default", "EnteringGrapple", "Grapple", "Leap", "Takedown"},
   gamePSMRangedWeaponStates = {"Default", "Charging", "Reload", "QuickMelee", "NoAmmo", "Ready", "Safe", "Overheat", "Shoot"},
   gamePSMSwimming = {"Default", "Surface", "Diving", "Climbing"},
   questPhoneCallPhase = {"Undefined", "IncomingCall", "StartCall", "EndCall"},
   EInkAnimationPlaybackOption = {"PLAY", "STOP", "PAUSE", "RESUME", "CONTINUE", "GO_TO_START", "GO_TO_END"},
-  gamedataItemType = {"Invalid", "Wea_AssaultRifle", "Wea_Handgun", "Wea_HeavyMachineGun", "Wea_LightMachineGun", "Wea_PrecisionRifle", "Wea_Revolver", "Wea_Rifle", "Wea_Shotgun", "Wea_ShotgunDual", "Wea_SniperRifle", "Wea_SubmachineGun"},
+  gamedataItemType = {"Clo_Face", "Clo_Feet", "Clo_Head", "Clo_InnerChest", "Clo_Legs", "Clo_OuterChest", "Clo_Outfit", "Con_Ammo", "Con_Edible", "Con_Inhaler", "Con_Injector", "Con_LongLasting", "Con_Skillbook", "Cyb_Ability", "Cyb_HealingAbility", "Cyb_Launcher", "Cyb_MantisBlades", "Cyb_NanoWires", "Cyb_StrongArms", "Cyberware", "CyberwareStatsShard", "CyberwareUpgradeShard", "Fla_Launcher", "Fla_Rifle", "Fla_Shock", "Fla_Support", "Gad_Grenade", "Gen_CraftingMaterial", "Gen_DataBank", "Gen_Jewellery", "Gen_Junk", "Gen_Keycard", "Gen_Misc", "Gen_MoneyShard", "Gen_Readable", "Gen_Tarot", "GrenadeDelivery", "Grenade_Core", "Prt_AR_SMG_LMGMod", "Prt_BladeMod", "Prt_BluntMod", "Prt_BootsFabricEnhancer", "Prt_Capacitor", "Prt_FabricEnhancer", "Prt_FaceFabricEnhancer", "Prt_Fragment", "Prt_HandgunMod", "Prt_HandgunMuzzle", "Prt_HeadFabricEnhancer", "Prt_LongScope", "Prt_Magazine", "Prt_MeleeMod", "Prt_Mod", "Prt_Muzzle", "Prt_OuterTorsoFabricEnhancer", "Prt_PantsFabricEnhancer", "Prt_PowerMod", "Prt_PowerSniperScope", "Prt_Precision_Sniper_RifleMod", "Prt_Program", "Prt_RangedMod", "Prt_Receiver", "Prt_RifleMuzzle", "Prt_Scope", "Prt_ScopeRail", "Prt_ShortScope", "Prt_ShotgunMod", "Prt_SmartMod", "Prt_Stock", "Prt_TargetingSystem", "Prt_TechMod", "Prt_TechSniperScope", "Prt_ThrowableMod", "Prt_TorsoFabricEnhancer", "VendorToken", "Wea_AssaultRifle", "Wea_Axe", "Wea_Chainsword", "Wea_Fists", "Wea_GrenadeLauncher", "Wea_Hammer", "Wea_Handgun", "Wea_HeavyMachineGun", "Wea_Katana", "Wea_Knife", "Wea_LightMachineGun", "Wea_LongBlade", "Wea_Machete", "Wea_Melee", "Wea_OneHandedClub", "Wea_PrecisionRifle", "Wea_Revolver", "Wea_Rifle", "Wea_ShortBlade", "Wea_Shotgun", "Wea_ShotgunDual", "Wea_SniperRifle", "Wea_SubmachineGun", "Wea_Sword", "Wea_TwoHandedClub", "Wea_VehicleMissileLauncher", "Wea_VehiclePowerWeapon", "Count", "Invalid"},
 }
 local function ordinal(typeName, name)
   for index, value in ipairs(enums[typeName]) do if value == name then return index - 1 end end
@@ -118,10 +124,10 @@ local world = {}
 local function reset()
   world = {attached = true, dead = false, pregame = false, paused = false, menu = false, photo = false,
     psm = {Locomotion = 0, LocomotionDetailed = 1, Landing = 0, MeleeWeapon = 2, Takedown = 0, Weapon = 0, Swimming = 0},
-    phone = nil, oxygen = 100,
+    phone = nil, oxygen = 100, simTime = 0,
     mounted = false, combat = false, heat = 0, health = 100, effects = {}, uploads = {}, facts = {},
     speed = 0, gear = 1, handbrake = 0, slip = 0, braindance = false, weapon = "Wea_Shotgun",
-    position = {x = 0, y = 0, z = 0}, levels = {Level = 10}}
+    position = {x = 0, y = 0, z = 0}, levels = {Level = 10, Espionage = 0}}
 end
 reset()
 local playerID = {hash = 42}
@@ -139,16 +145,19 @@ for _, name in ipairs({"GetEntityID", "IsAttached", "IsDeadNoStatPool", "IsInCom
   local f = player[name]; player[name] = function(self, ...) return f(...) end
 end
 local other = {GetEntityID = function() return {hash = 7} end}
-local defs = setmetatable({}, {__index = function(_, board) return setmetatable({}, {__index = function(_, key) return key end}) end})
+local defs = setmetatable({}, {__index = function(t, board)
+  local value = setmetatable({}, {__index = function(_, key) return key end})
+  rawset(t, board, value); return value
+end})
 Game = {
   GetPlayer = function() return world.attached and player or nil end,
   GetAllBlackboardDefs = function() return defs end,
-  GetBlackboardSystem = function() return {Get = function() return {GetBool = function(_, key)
+  GetBlackboardSystem = function() return {Get = function(_, board) return {GetBool = function(_, key)
     if key == "IsInMenu" then return world.menu end
-    if key == "IsActive" then return world.photo end
+    if key == "IsActive" then return board == defs.Braindance and world.braindance or board == defs.PhotoMode and world.photo or false end
     return false end,
     GetVariant = function(_, key) if key == "PhoneCallInformation" then return world.phone end end} end} end,
-  GetTimeSystem = function() return {IsPausedState = function() return world.paused end, IsTimeDilationActive = function() return false end} end,
+  GetTimeSystem = function() return {GetSimTime = function() return world.simTime end, IsPausedState = function() return world.paused end, IsTimeDilationActive = function() return false end} end,
   GetStatPoolsSystem = function() return {GetStatPoolValue = function(_, _, kind) return kind == "Oxygen" and world.oxygen or world.health end, GetStatPoolMaxPointValue = function() return 400 end} end,
   GetStatusEffectSystem = function() return {
     HasStatusEffectOfTypeName = function(_, _, name) return world.effects[name] == true end,
@@ -165,6 +174,7 @@ GetSingleton = function() return {GetSystemRequestsHandler = function() return {
 TweakDBID = {new = function(s) return s end}
 CName = {new = function(s) return s end}
 FromVariant = function(v) return v end
+EngineTime = {ToDouble = function(time) return time end}
 NameToString = function(v) return v end
 ItemID = {IsValid = function() return true end, IsOfTDBID = function(item, id) return item == id end}
 gamedataStatPoolType = {Health = "Health", Oxygen = "Oxygen"}
@@ -193,13 +203,17 @@ Observe = function(class, method, callback) hooks[class .. "." .. method] = call
 package.path = root .. "/src/cet/nightCityHaptics/?.lua;" .. package.path
 local mod = dofile(root .. "/src/cet/nightCityHaptics/init.lua")
 
-local function frames(seconds) for _ = 1, math.floor(seconds * 60 + .5) do events.onUpdate(1 / 60) end end
+local function update(dt)
+  if not world.paused and not world.menu then world.simTime = world.simTime + dt end
+  events.onUpdate(dt)
+end
+local function frames(seconds) for _ = 1, math.floor(seconds * 60 + .5) do update(1 / 60) end end
 local function eventIds()
   local result = {}
   for _, e in ipairs(state().events) do result[#result + 1] = e[2] end
   return table.concat(result, ",")
 end
-local function fire(name, ...) hooks[name](...); events.onUpdate(1 / 60) end
+local function fire(name, ...) hooks[name](...); update(1 / 60) end
 local function last() local list = state().events; return list[#list] end
 
 -- Start up -------------------------------------------------------------------------
@@ -399,7 +413,9 @@ count = last()[1]
 hud("random", "STOP")
 check(last()[1] == count, "a stopped flash is not a pulse")
 hud("synchronizing", "STOP")
-check(last()[2] == "romance:pulse" and last()[5] == 1.5, "synchronizing is the long peak")
+check(last()[1] == count, "a stopped synchronizing animation is not a pulse")
+hud("synchronizing", "PLAY")
+check(last()[2] == "romance:pulse" and last()[5] == 1.5, "playing synchronizing is the long peak")
 count = last()[1]
 fire("GameObject.OnCustomUIAnimationEvent", other, {libraryItemName = "sex_hud", animationName = "MAIN",
   playbackOption = Enum.new("EInkAnimationPlaybackOption", "PLAY")})
@@ -451,12 +467,169 @@ world.mounted, world.speed = false, 0; frames(.1)
 -- Old events age out; the API works for other mods.
 frames(2.5)
 check(eventIds() == "", "events older than two seconds are dropped")
-check(mod.Pulse(.4, 3) == true and last()[2] == "external" and last()[3] == .4 and last()[5] == 3, "Pulse API")
+local pulseAccepted = mod.Pulse(.4, 3); frames(.05)
+check(pulseAccepted == true and last()[2] == "external" and last()[3] == .4 and last()[5] == 3, "Pulse API")
 
--- Sessions: a new player attachment starts a fresh session.
+-- Regression checks keep one realistic game world per scenario.
+local function fresh(configure)
+  events.onOverlayClose(); reset()
+  if configure then configure() end
+  events.onInit(); frames(.1)
+end
+
+for _, entry in ipairs({
+    {"sq030_sex_done", "judy", false}, {"sq030_sex_done", "judyCensored", true},
+    {"sq028_kerry_sex", "kerry", false}, {"sq028_kerry_sex", "kerryCensored", true},
+    {"sq029_river_had_sex", "river", false}, {"sq027_panzer_sex", "panamCensored", true}}) do
+  fresh(function() world.facts.censorship_oversexualized = entry[3] and 1 or 0 end)
+  world.facts[entry[1]] = 1; frames(.1)
+  check(state().scene.name == entry[2] and last()[2] == "romance:" .. entry[2], "exact catalog scene variant: " .. entry[2])
+end
+
+fresh()
+world.effects["BaseStatusEffect.PlayerInFinisherWorkspot"] = true; frames(.1)
+check(last()[2] == "takedown", "ordinary and fast finisher buff starts the takedown interaction")
+mark = lastNumber(); frames(.5)
+check(idsSince(mark) == "", "one finisher produces only one pulse")
+fresh(function() world.effects["BaseStatusEffect.PlayerInFinisherWorkspot"] = true end)
+check(eventIds() == "", "loading during a finisher establishes a baseline")
+
+fresh()
+world.levels.Espionage = 1
+fire("LevelUpNotificationQueue.OnCharacterLevelUpdated", nil, {type = "Espionage", lvl = 1})
+check(last()[2] == "levelUp", "first Relic progression counts after its zero baseline")
+mark = lastNumber(); world.levels.Espionage = 2
+fire("LevelUpNotificationQueue.OnCharacterLevelUpdated", nil, {type = "Espionage", lvl = 1})
+check(idsSince(mark) == "levelUp", "Relic notification delta does not hide successive progression")
+mark = lastNumber()
+fire("LevelUpNotificationQueue.OnCharacterLevelUpdated", nil, {type = "Espionage", lvl = 1})
+check(idsSince(mark) == "", "repeated Relic notification without progression is ignored")
+
+fresh(); events.onOverlayOpen()
+world.facts.sq030_sex_done = 1; world.combat = true
+world.psm.LocomotionDetailed = ordinal("gamePSMDetailedLocomotionStates", "Jump")
+frames(.1); events.onOverlayClose(); frames(.1)
+check(eventIds() == "" and next(state().scene) == nil, "overlay reopening baselines facts, combat and movement")
+
+fresh(); world.facts.sq030_sex_done = 1; frames(.1)
+local scene = state().scene
+check(scene.name == "judy" and scene.instance > 0 and scene.elapsed >= 0, "scene telemetry identifies its track and instance")
+local sceneInstance, elapsed = scene.instance, scene.elapsed
+world.menu = true; world.paused = true; frames(.1)
+elapsed = state().scene.elapsed; frames(2)
+check(state().scene.instance == sceneInstance and math.abs(state().scene.elapsed - elapsed) < .04,
+  "native game pause preserves the scene at its simulation offset")
+mark = lastNumber(); world.menu = false; world.paused = false; frames(.1)
+check(state().scene.instance == sceneInstance and idsSince(mark) == "", "menu resume publishes the existing scene without replaying its fact")
+elapsed = state().scene.elapsed; hotkeys.nchPause(); frames(2)
+check(state().scene.elapsed > elapsed + 1.9 and state().scene.instance == sceneInstance,
+  "CET feedback Pause keeps pace with a scene that continues in the game")
+hotkeys.nchPause(); elapsed = state().scene.elapsed; events.onOverlayOpen(); frames(1)
+check(state().scene.elapsed > elapsed + .9, "overlay suspension retains the current simulation offset")
+events.onOverlayClose(); frames(.1)
+check(state().scene.instance == sceneInstance, "overlay resume retains the same encounter")
+fire("InvisibleSceneStash.OnQuestDressPlayer", {}, {})
+check(next(state().scene) == nil and last()[2] == "romance:end", "dress explicitly clears resumable scene telemetry")
+world.facts.sq030_sex_done = 0; frames(.1); world.facts.sq030_sex_done = 1; frames(.1)
+check(state().scene.instance > sceneInstance, "another anchored encounter gets a new instance")
+world.simTime = world.simTime + 150; frames(.1)
+check(next(state().scene) == nil, "a bounded scene expires even without dress")
+
+fresh()
+hud("random", "STOP")
+check(eventIds() == "" and next(state().scene) == nil, "a Panam STOP cannot create a scene")
+hud("synchronizing", "STOP")
+check(eventIds() == "", "an isolated synchronizing STOP cannot invent an encounter")
+events.onOverlayOpen(); hud("MAIN", "PLAY"); frames(1)
+check(eventIds() == "" and next(state().scene) == nil, "gated live Panam cue waits without emitting output")
+events.onOverlayClose(); frames(.1)
+check(state().scene.name == "panam" and state().scene.elapsed > .9 and last()[2] == "romance:panam",
+  "verified gated Panam anchor resumes once at its actual offset")
+mark = lastNumber(); hud("MAIN", "PLAY")
+check(idsSince(mark) == "romance:pulse", "later Panam cue accents the restored base track")
+mark = lastNumber(); hud("synchronizing", "STOP"); hud("MAIN", "STOP")
+check(idsSince(mark) == "" and state().scene.name == "panam", "active-scene STOP cues neither pulse nor replace its track")
+
+fresh(); world.facts.q003_stout_sex_agreed = 1; frames(.1)
+events.onOverlayOpen(); fire("InvisibleSceneStash.OnQuestUndressPlayer", {}, {}); frames(1)
+events.onOverlayClose(); frames(.1)
+check(state().scene.name == "stout" and state().scene.elapsed > .9,
+  "a verified armed undress cue also survives output suspension")
+fresh(); fire("InvisibleSceneStash.OnQuestUndressPlayer", {}, {})
+check(next(state().scene) == nil and eventIds() == "", "an unarmed shower never becomes a pending scene")
+fresh(); world.facts.q003_stout_sex_agreed = 1; frames(.1)
+world.paused = true; frames(121); world.paused = false; frames(.1)
+fire("InvisibleSceneStash.OnQuestUndressPlayer", {}, {})
+check(state().scene.name == "stout", "native pause does not consume an armed scene's bounded game-time window")
+fresh(); world.facts.q003_stout_sex_agreed = 1; frames(.1); frames(121)
+fire("InvisibleSceneStash.OnQuestUndressPlayer", {}, {})
+check(next(state().scene) == nil and eventIds() == "", "an expired Stout arm cannot start an unrelated undress")
+
+fresh(); world.facts.sq030_sex_done = 1; frames(.1)
+mark = lastNumber()
+fire("LoadingScreenProgressBarController.OnInitialize", {})
+check(not state().active and next(state().scene) == nil, "loading clears the current live encounter")
+world.combat = true; world.psm.LocomotionDetailed = ordinal("gamePSMDetailedLocomotionStates", "Jump")
+fire("LoadingScreenProgressBarController.SetProgress", {}, 1)
+check(next(state().scene) == nil and idsSince(mark) == "", "save facts stay baselines after loading")
+mark = lastNumber(); frames(.1)
+check(idsSince(mark) == "", "loading recovery baselines movement and combat")
+world.facts.sq030_sex_done = 0; frames(.1); world.facts.sq030_sex_done = 1; frames(.1)
+world.dead = true; fire("PlayerPuppet.OnDeath", player)
+check(not state().active and next(state().scene) == nil, "death clears resumable encounter telemetry")
+
+fresh(); local oldClock = EngineTime.ToDouble
+EngineTime.ToDouble = function() return 0 / 0 end
+world.facts.sq030_sex_done = 1; frames(.4)
+check(state().scene.name == "judy" and state().scene.elapsed > 0 and next(state().errors) == nil,
+  "an invalid simulation reading falls back to finite active elapsed time")
+hotkeys.nchPause(); elapsed = state().scene.elapsed; frames(1)
+check(math.abs(state().scene.elapsed - elapsed) < .04, "fallback timing remains frozen when feedback is paused")
+EngineTime.ToDouble = oldClock
+
+fresh(); local before = state().seq
+check(mod.Pulse(.4, 0 / 0) == false and mod.Pulse(.4, math.huge) == false and mod.Pulse(.4, -math.huge) == false,
+  "nonfinite external durations are rejected before they reach JSON")
+frames(1.2)
+check(state().seq > before and next(state().errors) == nil, "invalid durations cannot stall the heartbeat")
+check(mod.Pulse(.4, 1000) and last()[5] == 600, "finite durations retain the documented upper bound")
+
+fresh(); world.braindance = true; frames(.1)
+check(state().active and state().levels.braindance == 1, "braindance stub independently exercises its own board")
+world.photo = true; frames(.1)
+check(not state().active, "braindance and photo mode are separate gates")
+
+fresh()
+for _, name in ipairs({"ComboAttack", "FinalAttack", "StrongAttack", "SafeAttack", "BlockAttack", "SprintAttack",
+    "CrouchAttack", "JumpAttack", "ThrowAttack", "DeflectAttack", "EquipAttack"}) do
+  world.psm.MeleeWeapon = ordinal("gamePSMMeleeWeapon", name); frames(.1)
+  check(last()[2] == "melee", "actual vanilla attack ordinal works: " .. name)
+end
+world.psm.MeleeWeapon = ordinal("gamePSMMeleeWeapon", "Idle"); frames(.1)
+check(next(state().errors) == nil, "all vanilla melee enum paths, including idle, stay valid")
+
+fresh()
+local textLines, oldText, oldColored = {}, ImGui.Text, ImGui.TextColored
+ImGui.Text = function(text) textLines[#textLines + 1] = text end
+ImGui.TextColored = function(_, _, _, _, text) textLines[#textLines + 1] = text end
+files["status.json"] = json.encode({running = true, heartbeat = 1, devices = {}, output = 0})
+frames(.6); events.onOverlayOpen()
+for heartbeat = 2, 5 do
+  files["status.json"] = json.encode({running = true, heartbeat = heartbeat, devices = {}, output = 0})
+  frames(1)
+end
+events.onDraw()
+check(table.concat(textLines, " "):find("Running", 1, true) ~= nil, "changing status heartbeat keeps a quiet app fresh")
+frames(4); textLines = {}; events.onDraw()
+check(table.concat(textLines, " "):find("App not running", 1, true) ~= nil, "a stopped status heartbeat correctly expires")
+ImGui.Text, ImGui.TextColored = oldText, oldColored
+events.onOverlayClose(); frames(.1)
+
+-- Sessions: a new player attachment starts a fresh session and clears its scene.
+world.facts.sq030_sex_done = 1; frames(.1)
 local session = state().session
 hooks["PlayerPuppet.OnGameAttached"](player)
-check(state().session ~= session and state().seq == 1, "new session on player attach")
+check(state().session ~= session and state().seq == 1 and next(state().scene) == nil, "new session on player attach clears scene telemetry")
 
 -- Companion status shows in the overlay.
 files["status.json"] = '{"v":2,"running":true,"devices":["Lovense Hush"],"output":0.3,"enabled":true}'
@@ -464,5 +637,9 @@ frames(.6)
 events.onOverlayOpen()
 check(true, "status read without errors")
 check(next(state().errors) == nil, "no runtime errors: " .. (next(state().errors) or ""))
+events.onOverlayClose(); frames(.1)
+world.facts.sq030_sex_done = 0; frames(.1); world.facts.sq030_sex_done = 1; frames(.1)
+events.onShutdown()
+check(not state().active and next(state().scene) == nil, "shutdown clears the live scene before its final heartbeat")
 
 print(string.format("cet_harness: %d checks passed", passed))

@@ -16,7 +16,7 @@ CUE_RISE, CUE_FALL = .06, .64  # shape of one cue pulse in a scene track
 def clamp(value, low=0., high=1.):
     try:
         value = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return low
     if not math.isfinite(value):
         return low
@@ -123,8 +123,11 @@ def normalize_settings(raw, catalog):
     address = raw.get("intiface_address")
     if isinstance(address, str) and address.startswith("ws://") and len(address) < 200:
         settings["intiface_address"] = address
+    interactions = raw.get("interactions")
+    if not isinstance(interactions, dict):
+        interactions = {}
     for item in catalog["interactions"]:
-        saved = (raw.get("interactions") or {}).get(item["id"])
+        saved = interactions.get(item["id"])
         if not isinstance(saved, dict):
             continue
         target = settings["interactions"][item["id"]]
@@ -132,7 +135,7 @@ def normalize_settings(raw, catalog):
             target["on"] = saved["on"]
         if "strength" in saved:
             target["strength"] = clamp(saved["strength"])
-        if saved.get("feel") in feel_ids(catalog, item):
+        if isinstance(saved.get("feel"), str) and saved["feel"] in feel_ids(catalog, item):
             target["feel"] = saved["feel"]
     devices = raw.get("devices")
     if isinstance(devices, dict):
@@ -301,33 +304,92 @@ class GameLink:
 
     def update(self, raw, now):
         """Return the list of new events [(id, magnitude, seconds)] in this heartbeat."""
-        if not isinstance(raw, dict) or raw.get("v") != 2:
+        state = self._state(raw)
+        if state is None:
+            # A corrupt/part-written heartbeat must not leave the previous live
+            # levels flowing while we wait for the normal timeout.
+            self.changed, self.state = None, {}
             return []
-        session, seq = raw.get("session"), raw.get("seq")
-        if not isinstance(session, str) or type(seq) is not int:
-            return []
-        events = [e for e in raw.get("events", []) if isinstance(e, list) and len(e) >= 4
-                  and type(e[0]) is int and isinstance(e[1], str)]
+        session, seq = state["session"], state["seq"]
+        events = state["events"]
         if session != self.session:
-            self.session, self.seq, self.changed, self.state = session, seq, None, raw
+            self.session, self.seq, self.changed, self.state = session, seq, None, state
             self.last_event = max([e[0] for e in events], default=-1)
             return []
         if seq <= self.seq:
             if seq < self.seq:  # rewritten file; treat as a fresh baseline
-                self.seq, self.changed = seq, None
+                self.seq, self.changed, self.state = seq, None, state
+                self.last_event = max([e[0] for e in events], default=-1)
             return []
-        self.seq, self.changed, self.state = seq, now, raw
-        game_time = raw.get("t", 0)
+        self.seq, self.changed, self.state = seq, now, state
+        game_time = state["t"]
         fresh = []
         for event in sorted(events, key=lambda e: e[0]):
             if event[0] <= self.last_event:
                 continue
             self.last_event = event[0]
-            if isinstance(game_time, (int, float)) and game_time - clamp(event[3], -1e9, 1e9) > EVENT_MAX_AGE:
+            if game_time - event[3] > EVENT_MAX_AGE or event[3] > game_time + .1:
                 continue
-            seconds = event[4] if len(event) > 4 and isinstance(event[4], (int, float)) else None
+            seconds = event[4] if len(event) > 4 else None
             fresh.append((event[1], clamp(event[2]), seconds))
         return fresh
+
+    @staticmethod
+    def _state(raw):
+        """Validate the file boundary before updating any heartbeat state.
+
+        Unknown fields are retained for diagnostics. Malformed collections and
+        scene metadata fail closed; a malformed individual event is discarded.
+        """
+        def finite(value):
+            try:
+                return type(value) in (int, float) and math.isfinite(value)
+            except OverflowError:
+                return False
+
+        if not isinstance(raw, dict) or raw.get("v") != 2:
+            return None
+        if not isinstance(raw.get("session"), str) or not 0 < len(raw["session"]) <= 128:
+            return None
+        if type(raw.get("seq")) is not int or raw["seq"] < 0 or not finite(raw.get("t")):
+            return None
+        if type(raw.get("active")) is not bool or type(raw.get("paused", False)) is not bool:
+            return None
+        events, levels = raw.get("events", []), raw.get("levels", {})
+        # CET's JSON encoder emits an empty Lua table as []. Empty levels/scene
+        # therefore have an array representation while populated ones are objects.
+        if levels == []:
+            levels = {}
+        if events == {}:
+            events = []
+        if not isinstance(events, list) or len(events) > 256 or not isinstance(levels, dict) or len(levels) > 64:
+            return None
+        if any(not isinstance(key, str) or not finite(value) for key, value in levels.items()):
+            return None
+        state = dict(raw)
+        state["levels"] = {key: clamp(value) for key, value in levels.items()}
+        state["events"] = []
+        for event in events:
+            if (not isinstance(event, list) or not 4 <= len(event) <= 5
+                    or type(event[0]) is not int or event[0] < 0
+                    or not isinstance(event[1], str) or not 0 < len(event[1]) <= 128
+                    or not finite(event[2]) or not finite(event[3])):
+                continue
+            if len(event) == 5 and (not finite(event[4]) or not .05 <= event[4] <= 600):
+                continue
+            state["events"].append(event)
+        if "scene" in raw:
+            scene = raw["scene"]
+            if scene is None or scene == {} or scene == []:
+                state["scene"] = None
+            elif (isinstance(scene, dict) and isinstance(scene.get("name"), str)
+                  and 0 < len(scene["name"]) <= 64 and finite(scene.get("elapsed"))
+                  and 0 <= scene["elapsed"] <= 3600 and type(scene.get("instance")) is int
+                  and scene["instance"] >= 0):
+                state["scene"] = {key: scene[key] for key in ("name", "elapsed", "instance")}
+            else:
+                return None
+        return state
 
     def live(self, now):
         return self.changed is not None and now - self.changed <= self.timeout

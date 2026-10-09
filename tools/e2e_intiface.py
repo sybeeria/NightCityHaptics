@@ -12,6 +12,8 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -26,10 +28,27 @@ import nch  # noqa: E402
 ENGINE = nch.Engine().executable() or Path("intiface-engine")
 
 
+def received_since(receipt, sequence):
+    return [h["value"] for h in receipt.get("history", [])
+            if h.get("received") and h.get("sequence", 0) > sequence]
+
+
+def checks_pass(checks, expected_hurt):
+    return (checks["companion_connected"] and checks["device_listed"] == ["Lovense Hush"]
+            and abs(checks["hurt_peak"] - expected_hurt) <= .05
+            and len(checks["engine_values"]) >= 2
+            and checks["heartbeat_started_positive"] and checks["heartbeat_zero_received"]
+            and checks["final_after_heartbeat_stops"] == 0 and checks["try_peak"] > .3
+            and checks["quit_started_positive"] and checks["quit_zero_received"]
+            and checks["final_after_quit"] == 0)
+
+
 def inner():
     work = Path(tempfile.mkdtemp(prefix="nch-e2e-"))
     mod = work / "mod"
     mod.mkdir()
+    (mod / "companion").mkdir()
+    shutil.copyfile(ROOT / "src/companion/catalog.json", mod / "companion/catalog.json")
     (work / "settings.json").write_text(json.dumps({"start_intiface": False, "max_strength": .7}))
     received = work / "received.json"
     processes = []
@@ -50,24 +69,30 @@ def inner():
         nonlocal seq
         seq += 1
         state = {"v": 2, "session": "e2e", "seq": seq, "t": 50 + seq / 30, "active": True, "paused": False,
-                 "levels": {}, "events": []}
+                 "levels": [], "events": [], "scene": []}
         state.update(fields)
         tmp = mod / "state.json.tmp"
         tmp.write_text(json.dumps(state))
         os.replace(tmp, mod / "state.json")
 
-    def values():
+    def receipt():
         try:
-            return [h["value"] for h in json.loads(received.read_text())["history"] if h.get("received")]
+            return json.loads(received.read_text())
         except (OSError, ValueError, KeyError):
-            return []
+            return {}
+
+    def values(after=0):
+        return received_since(receipt(), after)
+
+    def boundary():
+        return receipt().get("command_count", 0)
 
     result = {"engine": str(ENGINE), "checks": {}}
     try:
-        start(ENGINE, "--websocket-port", 12345, "--use-device-websocket-server",
+        start(ENGINE, "--websocket-port", 12345, "--max-ping-time", 3000, "--use-device-websocket-server",
               "--user-device-config-file", ROOT / "tools/virtual-device-config.json", "--log", "warn")
         time.sleep(1)
-        start(sys.executable, ROOT / "tools/virtual_device.py", "--port", 19875, "--state-file", received)
+        start(sys.executable, ROOT / "tools/virtual_device.py", "--port", 19875, "--state-file", received, "--mod-dir", mod)
         start(sys.executable, ROOT / "src/companion/nch.py", "--mod-dir", mod, "--settings", work / "settings.json", "--no-browser")
         deadline = time.monotonic() + 20
         state = {}
@@ -84,31 +109,43 @@ def inner():
         # Baseline heartbeat, then live gameplay with a hit and a running engine.
         for _ in range(5):
             beat(); time.sleep(1 / 30)
-        start_count = len(values())
+        hurt_start = boundary()
         beat(events=[[1, "hurt", 1, 50 + seq / 30]], levels={"engine": 0})
         for _ in range(6):
             time.sleep(1 / 30); beat(events=[[1, "hurt", 1, 50]])
         time.sleep(.3)
-        hurt = values()[start_count:]
+        hurt = values(hurt_start)
         result["checks"]["hurt_peak"] = max(hurt, default=0)
+        engine_start = boundary()
         for _ in range(40):
             beat(levels={"engine": 1}); time.sleep(1 / 30)
-        engine = values()[start_count + len(hurt):]
+        engine = values(engine_start)
         result["checks"]["engine_values"] = sorted(set(engine))
+        heartbeat_start = boundary()
+        result["checks"]["heartbeat_started_positive"] = bool(engine and engine[-1] > 0)
         time.sleep(1.6)  # heartbeat stops: the companion must zero the device
-        result["checks"]["final_after_heartbeat_stops"] = values()[-1] if values() else None
+        stopped = values(heartbeat_start)
+        result["checks"]["heartbeat_zero_received"] = 0 in stopped
+        result["checks"]["final_after_heartbeat_stops"] = stopped[-1] if stopped else None
+        try_start = boundary()
         http("/api/try", {"id": "levelUp"})
         time.sleep(1.5)
-        result["checks"]["try_peak"] = max(values()[-40:], default=0)
+        result["checks"]["try_peak"] = max(values(try_start), default=0)
+        test_start = boundary()
+        http("/api/test-device", {"key": state["devices"][0]["key"]})
+        deadline = time.monotonic() + .6
+        while time.monotonic() < deadline and not any(v > 0 for v in values(test_start)):
+            time.sleep(.02)
+        current = values(test_start)
+        result["checks"]["quit_started_positive"] = bool(current and current[-1] > 0)
+        quit_start = boundary()
         http("/api/quit", {})
         time.sleep(1)
-        result["checks"]["final_after_quit"] = values()[-1] if values() else None
+        stopped = values(quit_start)
+        result["checks"]["quit_zero_received"] = 0 in stopped
+        result["checks"]["final_after_quit"] = stopped[-1] if stopped else None
         expected_hurt = .9 * .7
-        result["passed"] = (result["checks"]["companion_connected"] and result["checks"]["device_listed"] == ["Lovense Hush"]
-                            and abs(result["checks"]["hurt_peak"] - expected_hurt) <= .05
-                            and len(result["checks"]["engine_values"]) >= 2
-                            and result["checks"]["final_after_heartbeat_stops"] == 0
-                            and result["checks"]["try_peak"] > .3 and result["checks"]["final_after_quit"] == 0)
+        result["passed"] = checks_pass(result["checks"], expected_hurt)
     finally:
         for process in reversed(processes):
             process.terminate()
@@ -126,7 +163,8 @@ def main():
         return inner()
     if not ENGINE.is_file():
         raise SystemExit("Intiface Engine not found: set NCH_INTIFACE_ENGINE or use the app's Download button")
-    output = subprocess.run(["unshare", "-rn", "sh", "-c", f'ip link set lo up && NCH_E2E_INNER=1 exec "{sys.executable}" "{__file__}"'],
+    command = "ip link set lo up && NCH_E2E_INNER=1 exec " + shlex.quote(sys.executable) + " " + shlex.quote(__file__)
+    output = subprocess.run(["unshare", "-rn", "sh", "-c", command],
                             capture_output=True, text=True, timeout=120)
     line = next((l for l in output.stdout.splitlines() if l.startswith("{")), None)
     if not line:

@@ -174,6 +174,7 @@ footer{margin-top:48px;display:flex;flex-wrap:wrap;justify-content:space-between
         <div class="head"><h2 class="title" id="h-devices">Devices</h2><button class="pill small" id="scan">Scan</button></div>
         <div id="devlist"></div>
         <p class="meta" id="scanstate"></p>
+        <p class="meta" id="deviceerrors" role="alert" style="color:var(--red);white-space:pre-line" hidden></p>
       </section>
 
       <section class="block" id="settings" aria-labelledby="h-settings">
@@ -248,9 +249,20 @@ function save(change, key, delay = 0) {
 }
 function fill(r) { r.style.setProperty('--p', r.value + '%'); }
 function track(r, key, onchange) {
-  r.addEventListener('pointerdown', () => editing.add(key));
-  r.addEventListener('pointerup', () => setTimeout(() => editing.delete(key), 600));
-  r.addEventListener('input', () => { fill(r); onchange(r.value / 100); });
+  let dragging = false, timer;
+  const settle = () => { clearTimeout(timer); timer = setTimeout(() => editing.delete(key), 600); };
+  r.addEventListener('pointerdown', e => {
+    dragging = true; clearTimeout(timer); editing.add(key);
+    r.setPointerCapture(e.pointerId);
+  });
+  const release = () => { dragging = false; settle(); };
+  r.addEventListener('pointerup', release);
+  r.addEventListener('pointercancel', release);
+  r.addEventListener('lostpointercapture', release);
+  r.addEventListener('input', () => {
+    editing.add(key); if (!dragging) settle();
+    fill(r); onchange(r.value / 100);
+  });
 }
 function slider(value, key, label, onchange) {
   const r = el('input', {type: 'range', min: 0, max: 100, step: 1, value: pct(value)});
@@ -333,33 +345,52 @@ function updateInteractions() {
 
 // ---- devices ----
 let deviceKeys = null;
+const deviceRows = new Map();
 function motorSummary(motors) {
   const n = {};
   motors.forEach(m => n[m] = (n[m] || 0) + 1);
   return Object.entries(n).map(([m, k]) => (k > 1 ? k + ' × ' : '') + m.toLowerCase()).join(', ');
 }
 function updateDevices() {
-  const keys = S.devices.map(d => d.key + d.motors.join()).join('|');
+  const keys = JSON.stringify(S.devices.map(d => [d.key, d.settings_key, d.name, d.motors, d.extra_motors]));
   if (keys !== deviceKeys) {
     deviceKeys = keys;
     const list = $('devlist');
     list.replaceChildren();
+    deviceRows.clear();
     if (!S.devices.length) list.append(el('div', {className: 'empty'},
       el('p', {className: 'name', textContent: 'No device yet'}),
       el('p', {className: 'meta', textContent: 'Close the device’s phone app, switch the device to pairing mode, then press Scan. Any device Intiface supports works; iostindex.com lists them.'})));
     for (const d of S.devices) {
       const set = d.settings;
+      const settingsKey = d.settings_key || d.key;
       const num = el('span', {className: 'num', textContent: pct(set.strength)});
+      const on = checkbox(set.on, 'Use ' + d.name, v => save({devices: {[settingsKey]: {on: v}}}, d.key + 'on'));
+      const all = d.extra_motors ? checkbox(set.all_motors, 'Drive every motor', v => save({devices: {[settingsKey]: {all_motors: v}}}, d.key + 'm')) : null;
+      const strength = slider(set.strength, 'dev' + d.key, d.name + ' strength', v => {
+        num.textContent = pct(v); save({devices: {[settingsKey]: {strength: v}}}, d.key + 's', 250);
+      });
       const opts = el('div', {className: 'opts'},
-        el('label', {className: 'check'}, checkbox(set.on, 'Use ' + d.name, v => save({devices: {[d.key]: {on: v}}}, d.key + 'on')), 'Use this device'));
-      if (d.extra_motors) opts.append(el('label', {className: 'check'}, checkbox(set.all_motors, 'Drive every motor', v => save({devices: {[d.key]: {all_motors: v}}}, d.key + 'm')), 'All motors'));
+        el('label', {className: 'check'}, on, 'Use this device'));
+      if (all) opts.append(el('label', {className: 'check'}, all, 'All motors'));
       list.append(el('div', {className: 'dev'},
         el('div', {className: 'id'}, el('span', {className: 'name', textContent: d.name}), el('span', {className: 'meta', textContent: motorSummary(d.motors)})),
         el('div', {className: 'level'}, el('span', {textContent: 'Strength'}),
-          slider(set.strength, 'dev' + d.key, d.name + ' strength', v => { num.textContent = pct(v); save({devices: {[d.key]: {strength: v}}}, d.key + 's', 250); }), num),
+          strength, num),
         el('div', {className: 'foot'}, opts, button('Test', () => api('test-device', {key: d.key})))));
+      deviceRows.set(d.key, {on, all, strength, num});
     }
   }
+  for (const d of S.devices) {
+    const row = deviceRows.get(d.key), key = 'dev' + d.key;
+    row.on.checked = d.settings.on;
+    if (row.all) row.all.checked = d.settings.all_motors;
+    setSlider(row.strength, d.settings.strength, key);
+    if (!editing.has(key)) row.num.textContent = pct(d.settings.strength);
+  }
+  const errors = (S.device_errors || []).join('\n');
+  $('deviceerrors').textContent = errors;
+  $('deviceerrors').hidden = !errors;
   $('scan').disabled = S.link !== 'connected' || S.scanning;
   $('scanstate').textContent = S.scanning ? 'Scanning… put your device in pairing mode.' : '';
 }

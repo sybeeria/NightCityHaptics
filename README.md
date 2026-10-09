@@ -183,9 +183,12 @@ as described above.
 
 ## Development
 
+Tests need LuaJIT and `websockets>=15,<17`. Linux E2E also needs
+Intiface Engine, `unshare`, `ip`, and working user/network namespaces.
+
 ```sh
 luajit tests/cet_harness.lua                  # the real init.lua against a stubbed CET + game
-pip install websockets                        # tests only: an independent Buttplug server
+python3 -m pip install 'websockets>=15,<17'     # tests only; no extra runtime packages
 python3 -m unittest discover -s tests
 python3 tools/build.py                        # builds dist/ (game-relative ZIP + manifest)
 python3 tools/e2e_intiface.py                 # Linux: real Intiface Engine + simulated device

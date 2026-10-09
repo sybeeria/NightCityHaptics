@@ -13,6 +13,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 
 from websockets.exceptions import ConnectionClosed
 from websockets.sync.server import serve
@@ -288,6 +289,18 @@ class FakeIntiface:
 
 
 class WebSocketTests(unittest.TestCase):
+    def test_server_ping_watchdog_is_negotiated_and_satisfied(self):
+        server = FakeIntiface(max_ping=3000)
+        client = buttplug.Client(server.url)
+        try:
+            self.assertEqual(client.ping_every, 1.5)
+            with mock.patch.object(buttplug.time, "monotonic", return_value=client.next_ping + .01):
+                client.poll()
+            self.assertTrue(wait_for(lambda: server.commands("Ping")))
+        finally:
+            client.close()
+            server.close()
+
     def test_long_messages_and_server_pings(self):
         echoed = []
 
@@ -490,6 +503,9 @@ class AppTests(unittest.TestCase):
             self.assertEqual((status, font[:4]), (200, b"wOF2"), "the page's font is served locally")
             self.assertNotIn(b"https://", page, "the page loads nothing from the internet")
             self.assertEqual(call("POST", "/api/settings", {"max_strength": .2})[0], 403, "needs X-NCH")
+            for path in ("/api/settings", "/api/try", "/api/test-device"):
+                self.assertEqual(call("POST", path, [], {"X-NCH": "1"})[0], 400,
+                                 "valid JSON with the wrong body type is rejected")
             self.assertEqual(call("POST", "/api/settings", {"max_strength": .2, "interactions": {"loot": {"on": True}}},
                                   {"X-NCH": "1"})[0], 200)
             saved = json.loads(self.settings.read_text())
@@ -514,7 +530,8 @@ class AppTests(unittest.TestCase):
             self.assertEqual(call("POST", "/api/try", {"id": "romance"}, {"X-NCH": "1"})[0], 200)
             self.assertEqual(self.app.mixer.voices["try:romance"]["feel"], "track:stout")
             self.assertEqual(call("POST", "/api/reset", {}, {"X-NCH": "1"})[0], 200)
-            self.assertEqual(json.loads(self.settings.read_text())["max_strength"], .7)
+            self.assertEqual(json.loads(self.settings.read_text())["max_strength"], .2,
+                             "interaction reset preserves the user's output cap")
             self.assertEqual(json.loads(self.settings.read_text())["intiface_address"], self.server.url,
                              "reset keeps the Intiface address")
         finally:

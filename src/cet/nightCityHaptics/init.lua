@@ -19,6 +19,9 @@
 -- UI/hud/phone/newHudPhoneGameController.script:394-408 (UI_ComDevice.PhoneCallInformation);
 -- psm/crosshairTransitions.script:93 (PlayerStateMachine.Weapon = gamePSMRangedWeaponStates);
 -- player.script:5049/5387 (JohnnySickness tag, PlayerStateMachine.Swimming).
+-- psm/finisher.script:284 (PlayerInFinisherWorkspot on workspot and fast finishers);
+-- levelupNotification.script:162 (Espionage notification converts its level to a delta);
+-- core/systems/timeSystem.script:19, core/data/engineTime.script:6 (scene simulation clock).
 -- Scene facts and timings checked against current vanilla .scene files.
 local mod = {version = "0.2.2"}
 local R = {
@@ -26,7 +29,7 @@ local R = {
   loading = false, paused = false, shutdown = false, active = false, reason = "starting",
   levels = {}, events = {}, eventCount = 0, seen = {}, cooldowns = {}, playerKey = nil,
   companion = {}, statusRaw = nil, statusClock = nil, hooks = {}, errors = {}, dirty = false,
-  written = nil, scene = {}, joytoyUntil = 0,
+  written = nil, scene = {}, sceneCount = 0, joytoyUntil = 0,
 }
 
 local function attempt(name, callback, ...)
@@ -38,6 +41,9 @@ end
 local function clamp(value)
   if type(value) ~= "number" or value ~= value then return 0 end
   return math.max(0, math.min(1, value))
+end
+local function finite(value)
+  return type(value) == "number" and value == value and value ~= math.huge and value ~= -math.huge
 end
 -- Enum ordinals never change while the game runs, so each is looked up once.
 local enums = {}
@@ -64,6 +70,8 @@ local function encodeState()
   end
   return json.encode({v = 2, session = R.session, seq = R.seq, t = R.clock, active = R.active,
     paused = R.paused, reason = R.reason, levels = R.active and R.levels or {}, events = events,
+    scene = R.scene.playing and {name = R.scene.playing, instance = R.scene.instance,
+      elapsed = math.floor(R.scene.elapsed * 1000 + .5) / 1000} or {},
     hooks = R.hooks, errors = R.errors})
 end
 local function writeState()
@@ -80,7 +88,7 @@ end
 local function newSession(reason)
   R.session = tostring(os.time()) .. "-" .. string.format("%.6f", os.clock()) .. "-" .. tostring({}):gsub("[^%w]", "")
   R.seq, R.events, R.seen, R.cooldowns, R.levels, R.paused = 0, {}, {}, {}, {}, false
-  R.scene, R.joytoyUntil = {}, 0
+  R.scene, R.sceneCount, R.joytoyUntil, R.chargeStart = {}, 0, 0, nil
   R.active, R.reason, R.playerKey = false, reason, nil
   writeState()
 end
@@ -88,6 +96,7 @@ end
 -- Events are queued with an increasing number; the companion plays each once.
 local function event(id, magnitude, seconds, always)
   if not always and not R.active then return false end
+  if seconds ~= nil and (not finite(seconds) or seconds <= 0) then return false end
   magnitude = magnitude == nil and 1 or clamp(magnitude)
   if magnitude <= 0 then return false end
   R.eventCount = R.eventCount + 1
@@ -175,29 +184,72 @@ local function explosionAt(position)
   event("explosion", math.max(.15, strength))
 end
 
--- Intimate scenes. CET only says which scene started, pulsed or ended; the
--- companion's catalog.json holds each scene's timeline. A scene is "armed" by
+-- Intimate scenes. CET reports the live scene's simulation offset and its
+-- start/pulse/end events; the companion's catalog.json holds each timeline. A scene is "armed" by
 -- its quest fact and started by the anchor the research found for it.
 local JOYTOY_CLIPS = {"hey_gle_female_rich_sex_clip", "hey_gle_male_rich_sex_clip", "wbr_jpn_female_poor_sex_clip"}
 local JOYTOY_STOPS = {"hey_gle_prostittute_female_stop_rumble", "hey_gle_prostittute_male_stop_rumble",
   "wbr_sm_jpn_prostitute_female_stop_rumble", "wbr_sm_jpn_prostitute_male_stop_rumble"}
-local function startScene(name, seconds)
-  R.scene = {playing = name, playingUntil = R.clock + seconds}
-  event("romance:" .. name)
+local function sceneTime()
+  local value = attempt("scene clock", function()
+    return EngineTime.ToDouble(Game.GetTimeSystem():GetSimTime())
+  end)
+  return finite(value) and value or nil
+end
+local function startScene(name, seconds, elapsed, simulationStart)
+  if not R.active then return false end
+  R.sceneCount = R.sceneCount + 1
+  local time = simulationStart or sceneTime()
+  R.scene = {playing = name, duration = seconds, elapsed = elapsed or 0, instance = R.sceneCount,
+    simulationStart = simulationStart or (time and time - (elapsed or 0))}
+  return event("romance:" .. name)
 end
 local function armScene(name, anchor, seconds)
-  R.scene = {armed = name, anchor = anchor, armedUntil = R.clock + seconds}
+  R.scene = {armed = name, anchor = anchor, armedUntil = R.clock + seconds,
+    simulationArm = sceneTime(), armDuration = seconds}
 end
 local function anchorReached(anchor)
   local scene = R.scene
-  if scene.armed and scene.anchor == anchor and R.clock < scene.armedUntil then startScene(scene.armed, 120) end
+  if not scene.armed or scene.anchor ~= anchor then return end
+  local time = sceneTime()
+  local valid = time and scene.simulationArm and time - scene.simulationArm < scene.armDuration
+  if not time or not scene.simulationArm then valid = R.clock < scene.armedUntil end
+  if valid then
+    if not startScene(scene.armed, 120) then
+      R.scene = {pending = scene.armed, duration = 120, elapsed = 0, simulationStart = sceneTime()}
+    end
+  end
+end
+local function updateScene(dt)
+  local scene = R.scene
+  if not scene.playing and not scene.pending then return end
+  local time = sceneTime()
+  if time and scene.simulationStart then
+    local elapsed = time - scene.simulationStart
+    if finite(elapsed) then scene.elapsed = math.max(scene.elapsed, elapsed) end
+  elseif R.active and not R.paused then
+    scene.elapsed = scene.elapsed + dt
+  end
+  if scene.elapsed >= scene.duration then
+    R.scene = {}; R.dirty = true
+    event("romance:end")
+  elseif scene.pending and R.active and not R.paused then
+    startScene(scene.pending, scene.duration, scene.elapsed, scene.simulationStart)
+  end
+end
+local function clearEdges()
+  R.seen, R.chargeStart = {}, nil
 end
 
 local function registerHooks()
   hook("PlayerPuppet", "OnGameAttached", function(self) if samePlayer(self) then newSession("player attached") end end)
   hook("PlayerPuppet", "OnDetach", function(self) if samePlayer(self) or not Game.GetPlayer() then newSession("player detached") end end)
-  hook("PlayerPuppet", "OnDeath", function(self) if samePlayer(self) then R.active, R.reason = false, "dead"; writeState() end end)
-  hook("LoadingScreenProgressBarController", "OnInitialize", function() R.loading, R.active = true, false; writeState() end)
+  hook("PlayerPuppet", "OnDeath", function(self)
+    if samePlayer(self) then R.active, R.reason, R.scene = false, "dead", {}; clearEdges(); writeState() end
+  end)
+  hook("LoadingScreenProgressBarController", "OnInitialize", function()
+    R.loading, R.active, R.scene = true, false, {}; clearEdges(); writeState()
+  end)
   hook("LoadingScreenProgressBarController", "SetProgress", function(_, progress) if progress >= 1 then R.loading = false end end)
   hook("FastTravelSystem", "OnLoadingScreenFinished", function(_, finished) if finished then R.loading = false end end)
 
@@ -230,8 +282,12 @@ local function registerHooks()
     local data = FromVariant(value)
     if not data then return end
     local key = "level." .. tostring(data.type)
-    if R.seen[key] and data.lvl > R.seen[key] then event("levelUp") end
-    R.seen[key] = data.lvl
+    local level = data.lvl
+    if data.type == gamedataProficiencyType.Espionage then
+      level = Game.GetScriptableSystemsContainer():Get("PlayerDevelopmentSystem"):GetProficiencyLevel(Game.GetPlayer(), data.type)
+    end
+    if R.seen[key] and level > R.seen[key] then event("levelUp") end
+    R.seen[key] = level
   end)
   hook("JournalNotificationQueue", "PushQuestNotification", function(_, entry, state)
     if entry and state == gameJournalEntryState.Succeeded then event("questDone") end
@@ -241,15 +297,22 @@ local function registerHooks()
   -- Undress/Dress also run for every apartment shower, so they only count for an armed or playing scene.
   hook("InvisibleSceneStash", "OnQuestUndressPlayer", function() anchorReached("undress") end)
   hook("InvisibleSceneStash", "OnQuestDressPlayer", function()
-    if R.scene.playing and R.clock < R.scene.playingUntil then R.scene = {}; event("romance:end") end
+    if R.scene.playing or R.scene.pending then R.scene = {}; R.dirty = true; event("romance:end") end
   end)
   -- Panam's neural-link overlay: each flash is a pulse, "synchronizing" is the peak.
   hook("GameObject", "OnCustomUIAnimationEvent", function(self, e)
     if not e or NameToString(e.libraryItemName) ~= "sex_hud" or not samePlayer(self) then return end
-    if R.scene.playing ~= "panam" then startScene("panam", 240) end
     local animation = NameToString(e.animationName)
-    if animation == "synchronizing" then event("romance:pulse", 1, 1.5)
-    elseif tonumber(EnumInt(e.playbackOption)) ~= enum("EInkAnimationPlaybackOption", "STOP") then
+    local playing = tonumber(EnumInt(e.playbackOption)) == enum("EInkAnimationPlaybackOption", "PLAY")
+    if playing and R.scene.playing ~= "panam" and R.scene.pending ~= "panam" then
+      if not startScene("panam", 240) then
+        -- A verified live cue can arrive while output is suspended. Preserve its
+        -- simulation anchor; permanent facts acquired behind a gate stay baselines.
+        R.scene = {pending = "panam", duration = 240, elapsed = 0, simulationStart = sceneTime()}
+      end
+    end
+    if playing and animation == "synchronizing" and R.scene.playing == "panam" then event("romance:pulse", 1, 1.5)
+    elseif playing and R.scene.playing == "panam" then
       event("romance:pulse", animation == "MAIN" and 1 or .65)
     end
   end)
@@ -259,6 +322,7 @@ end
 local K  -- game handles built once, on the first sample
 local function sample(player)
   K = K or {kerenzikov = TweakDBID.new("BaseStatusEffect.KerenzikovPlayerBuff"),
+    finisher = TweakDBID.new("BaseStatusEffect.PlayerInFinisherWorkspot"),
     camo = CName.new("CamoActiveOnPlayer"), johnny = CName.new("JohnnySickness")}
   local levels = {}
   local defs = Game.GetAllBlackboardDefs()
@@ -292,14 +356,16 @@ local function sample(player)
     -- Baseline every progression level so the first level-up after loading counts.
     if R.seen.levelsSeeded then return end
     local system = Game.GetScriptableSystemsContainer():Get("PlayerDevelopmentSystem")
-    for _, name in ipairs({"Level", "StreetCred", "CoolSkill", "IntelligenceSkill", "ReflexesSkill", "StrengthSkill", "TechnicalAbilitySkill"}) do
+    for _, name in ipairs({"Level", "StreetCred", "CoolSkill", "IntelligenceSkill", "ReflexesSkill", "StrengthSkill", "TechnicalAbilitySkill", "Espionage"}) do
       local kind = gamedataProficiencyType[name]
       R.seen["level." .. tostring(kind)] = system:GetProficiencyLevel(player, kind)
     end
     R.seen.levelsSeeded = true
   end)
   probe("takedown", function()
-    if rose("takedown", psm:GetInt(P.Takedown) ~= enum("gamePSMTakedown", "Default")) then event("takedown") end
+    local takedown = rose("takedown", psm:GetInt(P.Takedown) ~= enum("gamePSMTakedown", "Default"))
+    local finisher = rose("finisher", Game.GetStatusEffectSystem():HasStatusEffect(id, K.finisher))
+    if takedown or finisher then event("takedown") end
   end)
   probe("combat", function() if rose("combat", player:IsInCombat()) then event("combatStart") end end)
   probe("police", function()
@@ -416,9 +482,14 @@ local function readStatus()
   local file = io.open("status.json", "r")
   if not file then return end
   local raw = file:read("*a"); file:close()
+  -- The companion changes its heartbeat on each rewrite, even while idle. A
+  -- truly identical file is stale; merely reading it cannot prove app liveness.
   if raw == R.statusRaw then return end
   local ok, decoded = pcall(json.decode, raw)
-  if ok and type(decoded) == "table" then R.companion, R.statusRaw, R.statusClock = decoded, raw, R.clock end
+  if ok and type(decoded) == "table" and (decoded.heartbeat == nil or
+      (finite(decoded.heartbeat) and decoded.heartbeat >= 0 and decoded.heartbeat % 1 == 0)) then
+    R.companion, R.statusRaw, R.statusClock = decoded, raw, R.clock
+  end
 end
 local function companionUp()
   return R.statusClock ~= nil and R.clock - R.statusClock < 3 and R.companion.running == true
@@ -442,6 +513,7 @@ registerForEvent("onUpdate", function(dt)
     if R.dirty then writeState() end
     return
   end
+  local sampleDelta = R.sampleClock
   R.sampleClock = 0
   local active, reason, player = gate()
   if player then
@@ -451,12 +523,13 @@ registerForEvent("onUpdate", function(dt)
   end
   local wasActive = R.active
   R.active, R.reason = active, reason
+  updateScene(sampleDelta)
   if active then
     local levels, ok = attempt("sample", sample, player)
     R.levels = ok and levels or {}
   else
     R.levels = {}
-    if wasActive then R.seen = {} end  -- fresh baselines after menus/loading
+    if wasActive then clearEdges() end  -- fresh baselines after menus/loading
   end
   -- Write when something changed; otherwise a 5-per-second heartbeat is enough.
   local content = json.encode({R.active, R.paused, R.reason, R.levels})
@@ -464,9 +537,9 @@ registerForEvent("onUpdate", function(dt)
   if R.readClock > .5 then R.readClock = 0; readStatus() end
 end)
 
-registerForEvent("onOverlayOpen", function() R.overlay = true; R.active = false; writeState() end)
+registerForEvent("onOverlayOpen", function() R.overlay = true; R.active = false; clearEdges(); writeState() end)
 registerForEvent("onOverlayClose", function() R.overlay = false end)
-registerForEvent("onShutdown", function() R.shutdown, R.active = true, false; writeState() end)
+registerForEvent("onShutdown", function() R.shutdown, R.active, R.scene = true, false, {}; writeState() end)
 
 -- Overlay colours match the companion page: paper, ink and one red.
 local INK, PAPER, RED = {.07, .07, .07, 1}, {.97, .97, .96, .98}, {.84, .06, .06, 1}
@@ -513,6 +586,7 @@ registerHotkey("nchTest", "Test buzz", testBuzz)
 
 -- For other CET mods: GetMod("nightCityHaptics").Pulse(strength 0-1, seconds?)
 mod.Pulse = function(strength, seconds)
+  if seconds ~= nil and not finite(seconds) then return false end
   return event("external", strength, type(seconds) == "number" and math.max(.05, math.min(600, seconds)) or nil)
 end
 mod.IsActive = function() return R.active and not R.paused end

@@ -40,7 +40,7 @@ body{max-width:880px;margin:0 auto;padding:28px 22px}h1{font-size:27px;margin:8p
 .stats{display:flex;gap:28px;flex-wrap:wrap;margin-top:18px}.stats strong{display:block;font-size:22px}canvas{width:100%;height:160px;background:#0e1822;border-radius:8px;margin:12px 0}table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:9px 0;border-bottom:1px solid #294052;font-size:14px}th{color:#a0b2c0;font-weight:500}td:last-child{width:62%}#game{font-size:15px}.error{color:#ffc28a}
 </style>
 <body><div class="tag">Night City Haptics</div><h1>Virtual device · no hardware</h1>
-<p>Load a save → <b>Arm</b> → <b>Test</b> → close CET.</p>
+<p>Start the companion → load a save → <b>Test buzz</b> → close CET.</p>
 <p class="quiet">Drive, shoot, or trigger an explosion. The meter shows commands received by the virtual device.</p>
 <section><div id="link" class="quiet">Connecting to monitor…</div><div id="value">0%</div>
 <div class="bar"><div id="fill"></div></div><div id="game" class="quiet">Game: waiting for live updates</div>
@@ -56,7 +56,7 @@ function show(data){
  byId('link').className=data.connected?'quiet':'error';
  byId('value').textContent=percent(data.current);byId('fill').style.width=percent(data.current);
  byId('peak').textContent=percent(data.peak);byId('count').textContent=data.command_count;
- byId('game').textContent=data.game.live?'Game: live · '+(data.game.armed?'armed':'disarmed'):'Game: no live updates';
+ byId('game').textContent=data.game.live?'Game: live · '+(data.game.active?'sampling':'feedback suspended'):'Game: no live updates';
  const rows=byId('rows');rows.replaceChildren();
  for(const item of data.history.filter(x=>x.received).slice(-10).reverse()){
   const row=document.createElement('tr');
@@ -102,26 +102,34 @@ class Monitor:
         self.history = deque(maxlen=600)
         self.error = ""
         self.game_session = self.game_seq = self.game_changed = None
-        self.game_live = self.game_armed = False
+        self.game_live = self.game_active = False
+        self.status_heartbeat = self.status_changed = None
         self.reactions = []
         self.labels = {}
         self.started = datetime.now(timezone.utc).isoformat()
         if self.mod_dir:
             try:
-                catalog = json.loads((self.mod_dir / "catalog.json").read_text(encoding="utf-8"))
-                self.labels = {x["id"]: x.get("label", x["id"]) for x in catalog["events"]}
+                catalog = json.loads((self.mod_dir / "companion/catalog.json").read_text(encoding="utf-8"))
+                self.labels = {x["id"]: x.get("label", x["id"]) for x in catalog["interactions"]}
             except (OSError, ValueError, KeyError, TypeError):
                 pass
 
     def poll_game(self, now=None):
         now = time.monotonic() if now is None else now
         state = {}
+        status = {}
         if self.mod_dir:
             try:
                 path = self.mod_dir / "state.json"
                 if path.stat().st_size <= 262144:
                     state = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
+            except (OSError, ValueError, UnicodeError):
+                pass
+            try:
+                path = self.mod_dir / "status.json"
+                if path.stat().st_size <= 262144:
+                    status = json.loads(path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, UnicodeError):
                 pass
         with self.lock:
             session = state.get("session") if isinstance(state, dict) else None
@@ -133,13 +141,25 @@ class Monitor:
             elif seq > self.game_seq:
                 self.game_seq, self.game_changed = seq, now
             self.game_live = self.game_changed is not None and now - self.game_changed < self.heartbeat_timeout
-            self.game_armed = self.game_live and state.get("armed") is True
-            contributions = state.get("contributions", {}) if self.game_live else {}
+            self.game_active = (self.game_live and state.get("active") is True
+                                and state.get("paused") is not True)
+            heartbeat = status.get("heartbeat") if isinstance(status, dict) else None
+            if type(heartbeat) is not int or heartbeat < 0 or status.get("running") is not True:
+                self.status_heartbeat = self.status_changed = None
+            elif self.status_heartbeat is None or heartbeat < self.status_heartbeat:
+                self.status_heartbeat, self.status_changed = heartbeat, None
+            elif heartbeat > self.status_heartbeat:
+                self.status_heartbeat, self.status_changed = heartbeat, now
+            status_live = self.status_changed is not None and now - self.status_changed < 1.5
+            contributions = status.get("contributions", {}) if status_live else {}
             self.reactions = []
             if isinstance(contributions, dict):
                 for name, amount in contributions.items():
                     if isinstance(name, str) and type(amount) in (int, float) and math.isfinite(amount) and amount > 0:
-                        self.reactions.append({"id": name, "label": self.labels.get(name, name), "contribution": amount})
+                        key = name[4:] if name.startswith("try:") else name
+                        label = self.labels.get(key, key)
+                        self.reactions.append({"id": name, "label": "Try: " + label if name.startswith("try:") else label,
+                                               "contribution": amount})
                 self.reactions.sort(key=lambda x: x["contribution"], reverse=True)
                 self.reactions = self.reactions[:8]
 
@@ -170,6 +190,7 @@ class Monitor:
                 self.peak = max(self.peak, self.current)
                 self.command_count += 1
                 self.history.append({"time": time.time(), "value": self.current, "received": True,
+                    "sequence": self.command_count,
                     "packet": text, "transport": "binary" if isinstance(packet, bytes) else "text",
                     "game_live": self.game_live, "reactions": [dict(x) for x in self.reactions]})
         return None
@@ -182,7 +203,7 @@ class Monitor:
                     "command_count": self.command_count, "packet_count": self.packet_count,
                     "connection_count": self.connection_count, "last_error": self.error,
                     "history": list(self.history),
-                    "game": {"live": self.game_live, "armed": self.game_armed,
+                    "game": {"live": self.game_live, "active": self.game_active,
                              "reactions": list(self.reactions)}}
 
     def save(self):
@@ -271,7 +292,7 @@ async def run(monitor, endpoint, port):
         receiver.cancel()
         await asyncio.gather(receiver, return_exceptions=True)
         monitor.set_connection(False)
-        monitor.game_live = monitor.game_armed = False
+        monitor.game_live = monitor.game_active = False
         monitor.reactions = []
         monitor.save()
         await asyncio.to_thread(server.shutdown)

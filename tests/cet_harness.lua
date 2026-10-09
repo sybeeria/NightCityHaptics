@@ -79,9 +79,10 @@ end
 json = {encode = encode, decode = decode}
 
 -- In-memory files ---------------------------------------------------------------
-local files = {}
+local files, writes = {}, 0
 io.open = function(path, mode)
   if mode == "w" then
+    if path == "state.json" then writes = writes + 1 end
     local buffer = {}
     return {write = function(_, text) buffer[#buffer + 1] = text; return true end,
             close = function() files[path] = table.concat(buffer); return true end}
@@ -99,6 +100,10 @@ local enums = {
   gamePSMLandingState = {"Default", "RegularLand", "HardLand", "VeryHardLand", "DeathLand", "SuperheroLand", "SuperheroLandRecovery"},
   gamePSMMeleeWeapon = {"NotReady", "Equipping", "Idle", "Safe", "PublicSafe", "Parried", "Hold", "ChargedHold", "Block", "Targeting", "Deflect", "ComboAttack", "FinalAttack", "StrongAttack"},
   gamePSMTakedown = {"Default", "EnteringGrapple", "Grapple", "Leap", "Takedown"},
+  gamePSMRangedWeaponStates = {"Default", "Charging", "Reload", "QuickMelee", "NoAmmo", "Ready", "Safe", "Overheat", "Shoot"},
+  gamePSMSwimming = {"Default", "Surface", "Diving", "Climbing"},
+  questPhoneCallPhase = {"Undefined", "IncomingCall", "StartCall", "EndCall"},
+  EInkAnimationPlaybackOption = {"PLAY", "STOP", "PAUSE", "RESUME", "CONTINUE", "GO_TO_START", "GO_TO_END"},
   gamedataItemType = {"Invalid", "Wea_AssaultRifle", "Wea_Handgun", "Wea_HeavyMachineGun", "Wea_LightMachineGun", "Wea_PrecisionRifle", "Wea_Revolver", "Wea_Rifle", "Wea_Shotgun", "Wea_ShotgunDual", "Wea_SniperRifle", "Wea_SubmachineGun"},
 }
 local function ordinal(typeName, name)
@@ -112,7 +117,8 @@ EnumInt = function(e) return ordinal(e.t, e.n) end
 local world = {}
 local function reset()
   world = {attached = true, dead = false, pregame = false, paused = false, menu = false, photo = false,
-    psm = {Locomotion = 0, LocomotionDetailed = 1, Landing = 0, MeleeWeapon = 2, Takedown = 0},
+    psm = {Locomotion = 0, LocomotionDetailed = 1, Landing = 0, MeleeWeapon = 2, Takedown = 0, Weapon = 0, Swimming = 0},
+    phone = nil, oxygen = 100,
     mounted = false, combat = false, heat = 0, health = 100, effects = {}, uploads = {}, facts = {},
     speed = 0, gear = 1, handbrake = 0, slip = 0, braindance = false, weapon = "Wea_Shotgun",
     position = {x = 0, y = 0, z = 0}, levels = {Level = 10}}
@@ -140,9 +146,10 @@ Game = {
   GetBlackboardSystem = function() return {Get = function() return {GetBool = function(_, key)
     if key == "IsInMenu" then return world.menu end
     if key == "IsActive" then return world.photo end
-    return false end} end} end,
+    return false end,
+    GetVariant = function(_, key) if key == "PhoneCallInformation" then return world.phone end end} end} end,
   GetTimeSystem = function() return {IsPausedState = function() return world.paused end, IsTimeDilationActive = function() return false end} end,
-  GetStatPoolsSystem = function() return {GetStatPoolValue = function() return world.health end, GetStatPoolMaxPointValue = function() return 400 end} end,
+  GetStatPoolsSystem = function() return {GetStatPoolValue = function(_, _, kind) return kind == "Oxygen" and world.oxygen or world.health end, GetStatPoolMaxPointValue = function() return 400 end} end,
   GetStatusEffectSystem = function() return {
     HasStatusEffectOfTypeName = function(_, _, name) return world.effects[name] == true end,
     HasStatusEffect = function(_, _, id) return world.effects[id] == true end,
@@ -160,7 +167,7 @@ CName = {new = function(s) return s end}
 FromVariant = function(v) return v end
 NameToString = function(v) return v end
 ItemID = {IsValid = function() return true end, IsOfTDBID = function(item, id) return item == id end}
-gamedataStatPoolType = {Health = "Health"}
+gamedataStatPoolType = {Health = "Health", Oxygen = "Oxygen"}
 gamedataProficiencyType = setmetatable({}, {__index = function(_, k) return k end})
 gameJournalEntryState = {Succeeded = "Succeeded", Failed = "Failed"}
 VehicleComponent = {GetOwnerVehicleSpeed = function() return world.speed end}
@@ -204,7 +211,7 @@ frames(.2)
 s = state()
 check(s.active == true and s.reason == "gameplay", "gameplay is active")
 local seq = s.seq
-frames(.2)
+frames(.3)
 check(state().seq > seq, "the heartbeat sequence keeps advancing")
 check(eventIds() == "", "no events on a quiet start")
 
@@ -271,7 +278,7 @@ check(last()[2] == "police", "police heat rising")
 world.heat = 1; count = #state().events; frames(.1)
 check(#state().events == count, "heat dropping is silent")
 world.health = 20; frames(.1)
-check(math.abs(state().levels.lowHealth - (.35 + .65 * .5)) < 1e-6, "low health level grows below 40%")
+check(math.abs(state().levels.lowHealth - (.35 + .65 * .5)) < .006, "low health level grows below 40% (two decimals)")
 world.health = 80; frames(.1)
 check(state().levels.lowHealth == 0, "healthy is silent")
 
@@ -305,11 +312,110 @@ check(#state().events == count, "repeated level notification is ignored")
 fire("JournalNotificationQueue.PushQuestNotification", nil, {}, "Succeeded")
 check(last()[2] == "questDone", "quest completed")
 
--- Romance facts: already-set facts never fire; only the moment they turn on does.
-world.facts.sq027_panzer_sex = 1; world.menu = true; frames(.1); world.menu = false; frames(.1)
-check(last()[2] ~= "romance", "a fact already set when sampling (re)starts is only a baseline")
-world.facts.sq028_05_sex_scene_started = 1; frames(.1)
-check(last()[2] == "romance", "Kerry's scene start fires romance")
+-- Status effects, weapon states, calls and air.
+world.effects = {Burning = true, EMP = true, Bleeding = true, JohnnySickness = true}; frames(.1)
+s = state()
+check(s.levels.burning == 1 and s.levels.shock == 1 and s.levels.poison == 1 and s.levels.relic == 1, "status levels")
+world.effects.Knockdown = true; frames(.1)
+check(last()[2] == "knockdown", "knockdown fires once")
+count = last()[1]; frames(.2)
+check(last()[1] == count, "staying knocked down does not repeat")
+world.effects.Blind = true; frames(.1)
+check(last()[2] == "flashed", "blinded")
+world.effects = {}; frames(.1)
+check(state().levels.burning == 0 and state().levels.relic == 0, "status levels clear")
+world.psm.Weapon = ordinal("gamePSMRangedWeaponStates", "Charging"); frames(.1)
+local charge = state().levels.charge
+frames(1)
+check(charge > .25 and state().levels.charge > charge, "charging builds up")
+frames(1)
+check(state().levels.charge == 1, "a full charge holds at 100%")
+world.psm.Weapon = ordinal("gamePSMRangedWeaponStates", "Overheat"); frames(.1)
+check(last()[2] == "overheat" and state().levels.charge == 0, "overheat fires, charge resets")
+world.psm.Weapon = ordinal("gamePSMRangedWeaponStates", "Reload"); frames(.1)
+check(last()[2] == "reload", "reload")
+world.psm.Weapon = 0
+world.phone = {isPlayerCalling = false, callPhase = Enum.new("questPhoneCallPhase", "IncomingCall")}; frames(.1)
+check(state().levels.phoneRing == 1, "an incoming call rings")
+world.phone.callPhase = Enum.new("questPhoneCallPhase", "StartCall"); frames(.1)
+check(state().levels.phoneRing == 0, "answering stops the ring")
+world.phone = {isPlayerCalling = true, callPhase = Enum.new("questPhoneCallPhase", "IncomingCall")}; frames(.1)
+check(state().levels.phoneRing == 0, "your own outgoing call does not ring")
+world.phone = nil
+world.psm.Swimming = ordinal("gamePSMSwimming", "Diving"); world.oxygen = 60; frames(.1)
+check(state().levels.oxygen == 0, "plenty of air is silent")
+world.oxygen = 0; frames(.1)
+check(state().levels.oxygen == 1, "no air left is full strength")
+world.psm.Swimming = ordinal("gamePSMSwimming", "Surface"); frames(.1)
+check(state().levels.oxygen == 0, "surfacing stops it")
+world.psm.Swimming, world.oxygen = 0, 100
+
+-- Romance: facts already set never fire; only the moment they change does.
+local function idsSince(n)
+  local result = {}
+  for _, e in ipairs(state().events) do if e[1] > n then result[#result + 1] = e[2] end end
+  return table.concat(result, ",")
+end
+local function lastNumber() return last() and last()[1] or 0 end
+world.facts.sq027_panzer_sex = 1; world.facts.sq028_kerry_sex = 1
+world.menu = true; frames(.1); world.menu = false; frames(.1)
+local mark = lastNumber()
+frames(.1)
+check(idsSince(mark) == "", "facts already set when sampling (re)starts are only a baseline")
+world.facts.sq028_kerry_sex = 2; frames(.1)
+check(last()[2] == "romance:kerry", "Kerry: a rising kerry_sex counter starts her track")
+world.facts.censorship_oversexualized = 1; world.facts.sq028_kerry_sex = 3; frames(.1)
+check(last()[2] == "romance:kerryCensored", "censored builds get the censored cut")
+world.facts.censorship_oversexualized = 0
+world.facts.sq030_sex_done = 1; frames(.1)
+check(last()[2] == "romance:judy", "Judy")
+world.facts.sq029_river_had_sex = 1; frames(.1)
+check(last()[2] == "romance:river", "River")
+fire("InvisibleSceneStash.OnQuestDressPlayer", {}, {})
+check(last()[2] == "romance:end", "dressing ends a playing scene")
+mark = lastNumber()
+fire("InvisibleSceneStash.OnQuestUndressPlayer", {}, {}); fire("InvisibleSceneStash.OnQuestDressPlayer", {}, {})
+check(idsSince(mark) == "", "a shower (undress/dress with nothing armed) is silent")
+world.facts.q003_stout_sex_agreed = 1; frames(.1)
+check(idsSince(mark) == "", "Stout's agreement only arms her scene")
+fire("InvisibleSceneStash.OnQuestUndressPlayer", {}, {})
+check(last()[2] == "romance:stout", "Stout: undressing starts the clip chain")
+fire("InvisibleSceneStash.OnQuestDressPlayer", {}, {})
+check(last()[2] == "romance:end", "Stout ends on dress")
+-- Panam: her full scene waits for the neural link; each flash is a pulse.
+world.facts.sq027_panzer_sex = 0; frames(.1); world.facts.sq027_panzer_sex = 1; frames(.1)
+mark = lastNumber()
+fire("InvisibleSceneStash.OnQuestUndressPlayer", {}, {})
+check(idsSince(mark) == "", "Panam is not started by undressing")
+local function hud(animation, option)
+  fire("GameObject.OnCustomUIAnimationEvent", player, {libraryItemName = "sex_hud", animationName = animation,
+    playbackOption = Enum.new("EInkAnimationPlaybackOption", option)})
+end
+hud("random", "PLAY")
+check(idsSince(mark) == "romance:panam,romance:pulse" and last()[3] == .65, "first flash starts Panam's track and pulses")
+hud("MAIN", "PLAY")
+check(last()[2] == "romance:pulse" and last()[3] == 1, "MAIN flashes are full pulses")
+count = last()[1]
+hud("random", "STOP")
+check(last()[1] == count, "a stopped flash is not a pulse")
+hud("synchronizing", "STOP")
+check(last()[2] == "romance:pulse" and last()[5] == 1.5, "synchronizing is the long peak")
+count = last()[1]
+fire("GameObject.OnCustomUIAnimationEvent", other, {libraryItemName = "sex_hud", animationName = "MAIN",
+  playbackOption = Enum.new("EInkAnimationPlaybackOption", "PLAY")})
+fire("GameObject.OnCustomUIAnimationEvent", player, {libraryItemName = "other_hud", animationName = "MAIN",
+  playbackOption = Enum.new("EInkAnimationPlaybackOption", "PLAY")})
+check(last()[1] == count, "other objects and other overlays are ignored")
+-- Joytoys: every clip boundary is a beat; the stop fact ends the encounter.
+world.facts.hey_gle_female_rich_sex_clip = 0; world.facts.hey_gle_prostittute_female_stop_rumble = 1; frames(.1)
+world.facts.hey_gle_female_rich_sex_clip = 1; frames(.1)
+check(last()[2] == "joytoy", "first clip")
+frames(2); world.facts.hey_gle_female_rich_sex_clip = 2; frames(.1)
+check(last()[2] == "joytoy", "next clip")
+world.facts.hey_gle_female_rich_sex_clip = 0; frames(.1)
+check(last()[2] == "joytoy", "the counter's reset is a clip boundary too")
+world.facts.hey_gle_prostittute_female_stop_rumble = 2; frames(.1)
+check(last()[2] == "joytoy:end", "stop_rumble ends the encounter")
 
 -- Gate: overlay, menus and pause are silent; levels clear; Test buzz still works.
 events.onOverlayOpen()
@@ -333,6 +439,14 @@ hotkeys.nchPause()
 check(state().paused == true, "pause hotkey")
 hotkeys.nchPause()
 check(state().paused == false, "resume hotkey")
+
+-- Performance: a steady game writes the 5-per-second heartbeat, not one file per sample.
+frames(2.5); writes = 0; frames(1)
+check(writes >= 4 and writes <= 6, "steady gameplay writes state.json about 5 times a second (" .. writes .. ")")
+world.mounted = true
+for _ = 1, 60 do world.speed = (world.speed + 3) % 40; events.onUpdate(1 / 60) end
+check(writes > 15, "changing levels are written as they change")
+world.mounted, world.speed = false, 0; frames(.1)
 
 -- Old events age out; the API works for other mods.
 frames(2.5)

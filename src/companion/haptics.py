@@ -9,6 +9,8 @@ import copy
 import math
 
 EVENT_MAX_AGE = 1.5  # seconds; older events in a heartbeat are ignored
+RELEASE = 1.5        # seconds a scene track takes to fade when its scene ends
+CUE_RISE, CUE_FALL = .06, .64  # shape of one cue pulse in a scene track
 
 
 def clamp(value, low=0., high=1.):
@@ -41,12 +43,29 @@ def _noise(t, rate=12.):
     step = math.floor(t * rate)
     blend = (1 - math.cos((t * rate - step) * math.pi)) / 2
 
-    def rand(n):
-        return (math.sin(n * 12.9898 + 78.233) * 43758.5453) % 1
-    return rand(step) * (1 - blend) + rand(step + 1) * blend
+    return _rand(step) * (1 - blend) + _rand(step + 1) * blend
 
 
-def texture(name, t, level=1.):
+def _rand(n):
+    return (math.sin(n * 12.9898 + 78.233) * 43758.5453) % 1
+
+
+def _joytoy(t, seed):
+    # The joytoy scenes' own rumble loop: a heavy or light pulse, then a random
+    # 0.5/0.7/0.9/1.1 s pause, again and again (reports/scene-research-20261010).
+    start, k = 0., 0
+    while True:
+        heavy = _rand(seed * 7.31 + k) < .5
+        length = .3 if heavy else .18
+        if t < start + length:
+            return 1. if heavy else .6
+        start += length + (.5, .7, .9, 1.1)[int(_rand(seed * 3.17 + k + .5) * 4) % 4]
+        if t < start:
+            return 0.
+        k += 1
+
+
+def texture(name, t, level=1., seed=0.):
     """Continuous modulation in 0..1 for level interactions."""
     if name == "rumble":
         return .55 + .45 * _noise(t)
@@ -58,6 +77,16 @@ def texture(name, t, level=1.):
         return 1. if (t / .2) % 1 < .5 else 0.
     if name == "footsteps":
         return 1. if (t / .36) % 1 < .3 else 0.
+    if name == "ring":
+        # A phone ringing: two buzzes, then a pause; a 3-second cycle.
+        phase = t % 3
+        return 1. if phase < .4 or .6 <= phase < 1. else 0.
+    if name == "glitch":
+        # Irregular stutter, like the relic's screen glitches.
+        step = math.floor(t * 18)
+        return .5 + .5 * _rand(step + .37) if _rand(step) > .45 else 0.
+    if name == "joytoy":
+        return _joytoy(t, seed)
     if name == "heartbeat":
         # Quickens from 60 to 110 bpm as the level rises.
         phase = (t / (1. - .45 * clamp(level))) % 1
@@ -67,6 +96,11 @@ def texture(name, t, level=1.):
             return .7
         return 0.
     return 1.
+
+
+def feel_ids(catalog, item):
+    """The feels this interaction may use; a feel with "for" belongs to those interactions only."""
+    return {f["id"] for f in catalog["feels"][item["kind"]] if item["id"] in f.get("for", [item["id"]])}
 
 
 def default_settings(catalog):
@@ -80,7 +114,6 @@ def normalize_settings(raw, catalog):
     settings = default_settings(catalog)
     if not isinstance(raw, dict):
         return settings
-    feels = {kind: {f["id"] for f in items} for kind, items in catalog["feels"].items()}
     if isinstance(raw.get("enabled"), bool):
         settings["enabled"] = raw["enabled"]
     if "max_strength" in raw:
@@ -99,7 +132,7 @@ def normalize_settings(raw, catalog):
             target["on"] = saved["on"]
         if "strength" in saved:
             target["strength"] = clamp(saved["strength"])
-        if saved.get("feel") in feels[item["kind"]]:
+        if saved.get("feel") in feel_ids(catalog, item):
             target["feel"] = saved["feel"]
     devices = raw.get("devices")
     if isinstance(devices, dict):
@@ -128,11 +161,16 @@ def blend(values, cap):
 
 
 class Mixer:
+    """Voices are keyed by interaction id; "<id>#<part>" is a second voice of the same
+    interaction (a scene's live pulses) and "try:<id>" a preview from the page."""
     def __init__(self, catalog):
         self.catalog = catalog
         self.kinds = {item["id"]: item["kind"] for item in catalog["interactions"]}
         self.effects = {f["id"]: f for f in catalog["feels"]["event"]}
-        self.voices = {}      # interaction id -> {start, magnitude, scale}
+        for name, track in catalog.get("tracks", {}).items():
+            if isinstance(track, dict):
+                self.effects["track:" + name] = track
+        self.voices = {}      # voice name -> {start, magnitude, feel, scale, release}
         self.level_start = {}  # interaction id -> time the level became active
         self.output = 0.
         self.contributions = {}
@@ -157,6 +195,29 @@ class Mixer:
             scale = clamp(seconds, .05, 600) / max(.01, effect["points"][-1][0])
         self.voices[name] = {"start": now, "magnitude": magnitude, "feel": feel, "scale": scale}
 
+    def game_event(self, event_id, magnitude, now, feel, seconds=None):
+        """Play one game event. "<id>:<variant>" picks a scene track when the feel is
+        "scene"; "<id>:end" fades the interaction's voices; "<id>:pulse" is a live accent."""
+        name, _, variant = event_id.partition(":")
+        if variant == "end":
+            self.release(name, now)
+            return
+        if variant == "pulse":
+            effect = "track:pulse" if feel == "scene" else feel
+            if effect in self.effects and not self.effects[effect]["points"][-1][0] > 10:
+                self.trigger(name + "#pulse", magnitude, now, effect, seconds)
+            return
+        if feel == "scene":
+            track = "track:" + (variant or name)
+            feel = track if track in self.effects else "swell"
+            seconds = None if track in self.effects else seconds
+        self.trigger(name, magnitude, now, feel, seconds)
+
+    def release(self, name, now):
+        for key, voice in self.voices.items():
+            if (key == name or key.startswith(name + "#")) and "release" not in voice:
+                voice["release"] = now
+
     def _voice_value(self, voice, now):
         effect = self.effects.get(voice["feel"])
         if not effect:
@@ -164,8 +225,21 @@ class Mixer:
         t = (now - voice["start"]) / voice["scale"]
         value = envelope(effect["points"], t)
         if effect.get("texture"):
-            value *= texture(effect["texture"], now - voice["start"])
+            value *= texture(effect["texture"], now - voice["start"], seed=voice["start"])
+        for cue_time, strength in effect.get("cues", ()):
+            age = t - cue_time
+            if 0 <= age < CUE_RISE:
+                value = max(value, strength * age / CUE_RISE)
+            elif CUE_RISE <= age < CUE_RISE + CUE_FALL:
+                value = max(value, strength * (1 - (age - CUE_RISE) / CUE_FALL))
+        if "release" in voice:
+            value *= max(0., 1 - (now - voice["release"]) / RELEASE)
         return value * voice["magnitude"]
+
+    def _finished(self, voice, now):
+        effect = self.effects.get(voice["feel"])
+        return (not effect or (now - voice["start"]) / voice["scale"] > effect["points"][-1][0]
+                or now - voice.get("release", now) > RELEASE)
 
     def tick(self, now, levels, settings, extra_voices=()):
         """Return (output, {interaction: strength}) for this moment."""
@@ -173,14 +247,13 @@ class Mixer:
         rules = settings["interactions"]
         raw = {}
         for name, voice in list(self.voices.items()):
-            effect = self.effects.get(voice["feel"])
-            if not effect or (now - voice["start"]) / voice["scale"] > effect["points"][-1][0]:
+            if self._finished(voice, now):
                 del self.voices[name]
                 continue
             # "try:<id>" previews an interaction even while it is switched off;
             # "test" is the in-game test buzz.
             trying = name.startswith("try:")
-            rule = rules.get(name[4:] if trying else name)
+            rule = rules.get((name[4:] if trying else name).split("#")[0])
             if name == "test":
                 strength = .6
             elif rule and (rule["on"] or trying):
@@ -201,7 +274,13 @@ class Mixer:
             if name not in (levels or {}):
                 del self.level_start[name]
         self.output = blend(raw.values(), master) if settings["enabled"] else 0.
-        self.contributions = {k: v for k, v in raw.items() if v > .001} if settings["enabled"] else {}
+        contributions = {}
+        if settings["enabled"]:
+            for name, value in raw.items():
+                if value > .001:
+                    key = name.split("#")[0]
+                    contributions[key] = max(contributions.get(key, 0.), value)
+        self.contributions = contributions
         return self.output, self.contributions
 
 

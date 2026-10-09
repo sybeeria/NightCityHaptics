@@ -1,6 +1,7 @@
--- Night City Haptics 0.2.1 (CET part)
+-- Night City Haptics 0.2.2 (CET part)
 -- Reports what happens in the game to the Night City Haptics companion app by
--- writing state.json in this folder about 30 times a second. The companion owns
+-- sampling about 30 times a second and writing state.json on changes/events or
+-- at a quiet 5 Hz heartbeat. The companion owns
 -- every setting, pattern and device; this file never talks to hardware.
 --
 -- Signatures checked against CDPR's decompiled scripts (Cyberpunk-Scripts):
@@ -11,13 +12,21 @@
 -- audioSystem.script:28, fragGrenade.script:38, ExplosiveDevice.script:261,
 --   vehicleComponent.script:2445/3100/3152: explosions and collisions;
 -- itemsQueue/currencyNotification/levelupNotification/journalNotification queues;
--- items/actions/useHealCharge.script:4. Romance facts: HISTORY.md § scene-sources.
-local mod = {version = "0.2.1"}
+-- items/actions/useHealCharge.script:4;
+-- devices/stash/invisibleSceneStash.script:11/40 (OnQuestUndressPlayer / OnQuestDressPlayer);
+-- core/entity/gameObject.script:3358 OnCustomUIAnimationEvent (Panam's 'sex_hud' pulses);
+-- core/systems/statusEffectSystem.script:39 HasStatusEffectOfTypeName (gamedataStatusEffectType names);
+-- UI/hud/phone/newHudPhoneGameController.script:394-408 (UI_ComDevice.PhoneCallInformation);
+-- psm/crosshairTransitions.script:93 (PlayerStateMachine.Weapon = gamePSMRangedWeaponStates);
+-- player.script:5049/5387 (JohnnySickness tag, PlayerStateMachine.Swimming).
+-- Scene facts and timings checked against current vanilla .scene files.
+local mod = {version = "0.2.2"}
 local R = {
   session = "", seq = 0, clock = 0, sampleClock = 0, writeClock = 0, overlay = false,
   loading = false, paused = false, shutdown = false, active = false, reason = "starting",
   levels = {}, events = {}, eventCount = 0, seen = {}, cooldowns = {}, playerKey = nil,
   companion = {}, statusRaw = nil, statusClock = nil, hooks = {}, errors = {}, dirty = false,
+  written = nil, scene = {}, joytoyUntil = 0,
 }
 
 local function attempt(name, callback, ...)
@@ -30,7 +39,14 @@ local function clamp(value)
   if type(value) ~= "number" or value ~= value then return 0 end
   return math.max(0, math.min(1, value))
 end
-local function enum(typeName, valueName) return tonumber(EnumInt(Enum.new(typeName, valueName))) end
+-- Enum ordinals never change while the game runs, so each is looked up once.
+local enums = {}
+local function enum(typeName, valueName)
+  local key = typeName .. "." .. valueName
+  local value = enums[key]
+  if value == nil then value = tonumber(EnumInt(Enum.new(typeName, valueName))); enums[key] = value end
+  return value
+end
 local function isOneOf(typeName, value, names)
   for _, name in ipairs(names) do if value == enum(typeName, name) then return true end end
   return false
@@ -52,6 +68,7 @@ local function encodeState()
 end
 local function writeState()
   while #R.events > 24 or (R.events[1] and R.clock - R.events[1].t > 2) do table.remove(R.events, 1) end
+  R.written = nil
   R.seq = R.seq + 1
   local raw, ok = attempt("encode", encodeState)
   if not ok then return end
@@ -63,6 +80,7 @@ end
 local function newSession(reason)
   R.session = tostring(os.time()) .. "-" .. string.format("%.6f", os.clock()) .. "-" .. tostring({}):gsub("[^%w]", "")
   R.seq, R.events, R.seen, R.cooldowns, R.levels, R.paused = 0, {}, {}, {}, {}, false
+  R.scene, R.joytoyUntil = {}, 0
   R.active, R.reason, R.playerKey = false, reason, nil
   writeState()
 end
@@ -152,8 +170,27 @@ local function explosionAt(position)
   -- Several notifications can describe one blast; merge them for 0.15 s.
   local key = string.format("%.0f.%.0f.%.0f", position.x, position.y, position.z)
   if R.cooldowns[key] and R.clock - R.cooldowns[key] < .15 then return end
+  for other, time in pairs(R.cooldowns) do if R.clock - time > 1 then R.cooldowns[other] = nil end end
   R.cooldowns[key] = R.clock
   event("explosion", math.max(.15, strength))
+end
+
+-- Intimate scenes. CET only says which scene started, pulsed or ended; the
+-- companion's catalog.json holds each scene's timeline. A scene is "armed" by
+-- its quest fact and started by the anchor the research found for it.
+local JOYTOY_CLIPS = {"hey_gle_female_rich_sex_clip", "hey_gle_male_rich_sex_clip", "wbr_jpn_female_poor_sex_clip"}
+local JOYTOY_STOPS = {"hey_gle_prostittute_female_stop_rumble", "hey_gle_prostittute_male_stop_rumble",
+  "wbr_sm_jpn_prostitute_female_stop_rumble", "wbr_sm_jpn_prostitute_male_stop_rumble"}
+local function startScene(name, seconds)
+  R.scene = {playing = name, playingUntil = R.clock + seconds}
+  event("romance:" .. name)
+end
+local function armScene(name, anchor, seconds)
+  R.scene = {armed = name, anchor = anchor, armedUntil = R.clock + seconds}
+end
+local function anchorReached(anchor)
+  local scene = R.scene
+  if scene.armed and scene.anchor == anchor and R.clock < scene.armedUntil then startScene(scene.armed, 120) end
 end
 
 local function registerHooks()
@@ -200,10 +237,29 @@ local function registerHooks()
     if entry and state == gameJournalEntryState.Succeeded then event("questDone") end
   end)
   hook("UseHealChargeAction", "CompleteAction", function(self) if samePlayer(self:GetExecutor()) then event("heal") end end)
+
+  -- Undress/Dress also run for every apartment shower, so they only count for an armed or playing scene.
+  hook("InvisibleSceneStash", "OnQuestUndressPlayer", function() anchorReached("undress") end)
+  hook("InvisibleSceneStash", "OnQuestDressPlayer", function()
+    if R.scene.playing and R.clock < R.scene.playingUntil then R.scene = {}; event("romance:end") end
+  end)
+  -- Panam's neural-link overlay: each flash is a pulse, "synchronizing" is the peak.
+  hook("GameObject", "OnCustomUIAnimationEvent", function(self, e)
+    if not e or NameToString(e.libraryItemName) ~= "sex_hud" or not samePlayer(self) then return end
+    if R.scene.playing ~= "panam" then startScene("panam", 240) end
+    local animation = NameToString(e.animationName)
+    if animation == "synchronizing" then event("romance:pulse", 1, 1.5)
+    elseif tonumber(EnumInt(e.playbackOption)) ~= enum("EInkAnimationPlaybackOption", "STOP") then
+      event("romance:pulse", animation == "MAIN" and 1 or .65)
+    end
+  end)
 end
 
 -- polled state ------------------------------------------------------------------
+local K  -- game handles built once, on the first sample
 local function sample(player)
+  K = K or {kerenzikov = TweakDBID.new("BaseStatusEffect.KerenzikovPlayerBuff"),
+    camo = CName.new("CamoActiveOnPlayer"), johnny = CName.new("JohnnySickness")}
   local levels = {}
   local defs = Game.GetAllBlackboardDefs()
   local psm = player:GetPlayerStateMachineBlackboard()
@@ -260,10 +316,10 @@ local function sample(player)
   probe("cyberware", function()
     local effects = Game.GetStatusEffectSystem()
     local sandy = effects:HasStatusEffectOfTypeName(id, "Sandevistan")
-    local kerenzikov = effects:HasStatusEffect(id, TweakDBID.new("BaseStatusEffect.KerenzikovPlayerBuff"))
+    local kerenzikov = effects:HasStatusEffect(id, K.kerenzikov)
     levels.slowmo = (sandy or kerenzikov) and 1 or 0
     levels.berserk = effects:HasStatusEffectOfTypeName(id, "Berserk") and 1 or 0
-    levels.camo = effects:HasStatusEffectWithTag(id, CName.new("CamoActiveOnPlayer")) and 1 or 0
+    levels.camo = effects:HasStatusEffectWithTag(id, K.camo) and 1 or 0
     local uploads = FromVariant(psm:GetVariant(P.UploadingQuickHackIDs))
     levels.quickhack = type(uploads) == "table" and #uploads > 0 and 1 or 0
   end)
@@ -286,15 +342,72 @@ local function sample(player)
     local boards = Game.GetBlackboardSystem()
     levels.braindance = boards:Get(defs.Braindance):GetBool(defs.Braindance.IsActive) and 1 or 0
   end)
+  probe("status", function()
+    local effects = Game.GetStatusEffectSystem()
+    local function has(name) return effects:HasStatusEffectOfTypeName(id, name) end
+    levels.burning = has("Burning") and 1 or 0
+    levels.shock = (has("Electrocuted") or has("EMP")) and 1 or 0
+    levels.poison = (has("Poisoned") or has("Bleeding")) and 1 or 0
+    levels.relic = effects:HasStatusEffectWithTag(id, K.johnny) and 1 or 0
+    if rose("knockdown", has("Knockdown") or has("Stunned")) then event("knockdown") end
+    if rose("flashed", has("Blind")) then event("flashed") end
+  end)
+  probe("weapon", function()
+    local state = psm:GetInt(P.Weapon)
+    if state == enum("gamePSMRangedWeaponStates", "Charging") then
+      R.chargeStart = R.chargeStart or R.clock
+      levels.charge = .25 + .75 * math.min(1, (R.clock - R.chargeStart) / 1.5)
+    else
+      R.chargeStart, levels.charge = nil, 0
+    end
+    if changed("weaponState", state) then
+      if state == enum("gamePSMRangedWeaponStates", "Reload") then event("reload")
+      elseif state == enum("gamePSMRangedWeaponStates", "Overheat") then event("overheat") end
+    end
+  end)
+  probe("phone", function()
+    local board = Game.GetBlackboardSystem():Get(defs.UI_ComDevice)
+    local call = FromVariant(board:GetVariant(defs.UI_ComDevice.PhoneCallInformation))
+    local ringing = call ~= nil and not call.isPlayerCalling
+      and tonumber(EnumInt(call.callPhase)) == enum("questPhoneCallPhase", "IncomingCall")
+    levels.phoneRing = ringing and 1 or 0
+  end)
+  probe("oxygen", function()
+    levels.oxygen = 0
+    if psm:GetInt(P.Swimming) ~= enum("gamePSMSwimming", "Diving") then return end
+    local oxygen = Game.GetStatPoolsSystem():GetStatPoolValue(id, gamedataStatPoolType.Oxygen, true) / 100
+    if oxygen < .5 then levels.oxygen = .3 + .7 * (.5 - oxygen) / .5 end
+  end)
   probe("romance", function()
     local quests = Game.GetQuestsSystem()
-    -- Both facts stay set after the scene, so only the moment they turn on counts.
-    for _, fact in ipairs({"sq028_05_sex_scene_started", "sq027_panzer_sex"}) do
-      if rose(fact, quests:GetFactStr(fact) > 0) then event("romance") end
+    local function fact(name) return quests:GetFactStr(name) end
+    -- These facts stay set after the scene, so only the moment they change counts.
+    local function turnedOn(name) return rose(name, fact(name) > 0) end
+    local function increased(name)
+      local value, previous = fact(name), R.seen[name]
+      R.seen[name] = value
+      return previous ~= nil and value > previous
+    end
+    local censored = fact("censorship_oversexualized") > 0
+    if increased("sq028_kerry_sex") then startScene(censored and "kerryCensored" or "kerry", 90) end
+    if turnedOn("sq030_sex_done") then startScene(censored and "judyCensored" or "judy", 140) end
+    if turnedOn("sq029_river_had_sex") then startScene("river", 130) end
+    if turnedOn("q003_stout_sex_agreed") then armScene("stout", "undress", 120) end
+    if turnedOn("sq027_panzer_sex") then
+      -- The full scene starts on its first neural-link pulse; the censored cut has none.
+      if censored then startScene("panamCensored", 240) else armScene("panam", "pulse", 300) end
+    end
+    -- Joytoys: the clip counter changes at every clip boundary (2 s or 5 s loops).
+    local ticked = false
+    for _, name in ipairs(JOYTOY_CLIPS) do if changed(name, fact(name)) then ticked = true end end
+    if ticked then R.joytoyUntil = R.clock + 6; event("joytoy") end
+    for _, name in ipairs(JOYTOY_STOPS) do
+      if increased(name) and R.clock < R.joytoyUntil then R.joytoyUntil = 0; event("joytoy:end") end
     end
   end)
   -- CET's json.encode rejects NaN; a bad reading must never stall the heartbeat.
-  for name, value in pairs(levels) do levels[name] = clamp(value) end
+  -- Two decimals are plenty and keep tiny wobbles from forcing a write.
+  for name, value in pairs(levels) do levels[name] = math.floor(clamp(value) * 100 + .5) / 100 end
   return levels
 end
 
@@ -345,7 +458,9 @@ registerForEvent("onUpdate", function(dt)
     R.levels = {}
     if wasActive then R.seen = {} end  -- fresh baselines after menus/loading
   end
-  writeState()
+  -- Write when something changed; otherwise a 5-per-second heartbeat is enough.
+  local content = json.encode({R.active, R.paused, R.reason, R.levels})
+  if R.dirty or content ~= R.written or R.writeClock >= .2 then writeState(); R.written = content end
   if R.readClock > .5 then R.readClock = 0; readStatus() end
 end)
 

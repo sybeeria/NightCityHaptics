@@ -43,6 +43,7 @@ class CatalogTests(unittest.TestCase):
         ids = [i["id"] for i in CATALOG["interactions"]]
         self.assertEqual(len(ids), len(set(ids)))
         for item in CATALOG["interactions"]:
+            self.assertIn(item["default"]["feel"], haptics.feel_ids(CATALOG, item), item["id"])
             self.assertIn(item["default"]["feel"], feels[item["kind"]], item["id"])
             self.assertIn(item["category"], categories)
             self.assertTrue(0 < item["default"]["strength"] <= 1)
@@ -50,11 +51,32 @@ class CatalogTests(unittest.TestCase):
             times = [p[0] for p in effect["points"]]
             self.assertEqual(times, sorted(times), effect["id"])
             self.assertEqual(effect["points"][-1][1], 0, effect["id"] + " must end silent")
+        for name, track in CATALOG["tracks"].items():
+            if not isinstance(track, dict):
+                continue
+            times = [p[0] for p in track["points"]]
+            self.assertEqual(times, sorted(times), name)
+            self.assertEqual(track["points"][-1][1], 0, name + " must end silent")
+            for cue_time, strength in track.get("cues", []):
+                self.assertTrue(0 <= cue_time <= times[-1] and 0 < strength <= 1, name)
+
+    def test_every_scene_cet_can_start_has_a_track(self):
+        lua = (SRC.parent / "cet/nightCityHaptics/init.lua").read_text()
+        import re
+        scenes = set(re.findall(r'(?:startScene|armScene)\((?:censored and )?"(\w+)"', lua))
+        scenes |= set(re.findall(r'or "(\w+)", \d+\)', lua))
+        self.assertTrue({"kerry", "kerryCensored", "judy", "judyCensored", "river", "stout", "panam", "panamCensored"} <= scenes, scenes)
+        for scene in scenes:
+            self.assertIn(scene, CATALOG["tracks"], scene)
+
+    def test_scene_feel_belongs_to_scene_interactions_only(self):
+        for item in CATALOG["interactions"]:
+            self.assertEqual("scene" in haptics.feel_ids(CATALOG, item), item["id"] in ("romance", "joytoy"), item["id"])
 
     def test_cet_reports_every_interaction(self):
         lua = (SRC.parent / "cet/nightCityHaptics/init.lua").read_text()
         for item in CATALOG["interactions"]:
-            needle = f'event("{item["id"]}"' if item["kind"] == "event" else f'levels.{item["id"]}'
+            needle = f'event("{item["id"]}' if item["kind"] == "event" else f'levels.{item["id"]}'
             self.assertIn(needle, lua, item["id"])
 
 
@@ -124,6 +146,49 @@ class MixerTests(unittest.TestCase):
             values = [haptics.texture("heartbeat", t / 100, level) for t in range(600)]
             return sum(1 for a, b in zip(values, values[1:]) if a == 0 and b == 1.)
         self.assertGreater(beats(1), beats(.1))
+
+    def test_scene_events_follow_their_track(self):
+        settings = self.settings
+        self.mixer.game_event("romance:stout", 1, 0., "scene")
+        self.assertEqual(self.mixer.voices["romance"]["feel"], "track:stout")
+        early = self.mixer.tick(0.1, {}, settings)[0]
+        cue = self.mixer.tick(3.76, {}, settings)[0]          # an "intense" moan cue at 3.7 s
+        self.assertGreater(cue, early)
+        self.mixer.game_event("romance:pulse", 1, 4., "scene")
+        self.assertIn("romance#pulse", self.mixer.voices)
+        _, parts = self.mixer.tick(4.05, {}, settings)
+        self.assertEqual(set(parts), {"romance"}, "a scene's pulses show as the scene, not a separate entry")
+        self.mixer.game_event("romance:end", 1, 5., "scene")
+        self.assertGreater(self.mixer.tick(5.1, {}, settings)[0], 0, "ending fades rather than cuts")
+        self.mixer.tick(5. + haptics.RELEASE + .1, {}, settings)
+        self.assertEqual(self.mixer.voices, {}, "every voice of the scene is gone after the release")
+
+    def test_scene_events_with_another_feel(self):
+        self.mixer.game_event("romance:kerry", 1, 0., "slowbuild")
+        self.assertEqual(self.mixer.voices["romance"]["feel"], "slowbuild")
+        self.mixer.game_event("romance:pulse", 1, 1., "slowbuild")
+        self.assertNotIn("romance#pulse", self.mixer.voices, "long feels are not repeated as pulses")
+        self.mixer.game_event("romance:nosuchscene", 1, 2., "scene")
+        self.assertEqual(self.mixer.voices["romance"]["feel"], "swell", "an unknown scene falls back to a swell")
+
+    def test_joytoy_rhythm_is_the_games_pulse_and_pause(self):
+        values = [haptics.texture("joytoy", i / 100, seed=3.) for i in range(700)]
+        self.assertEqual(values[0] in (1., .6), True, "a clip starts on a pulse")
+        gaps, run = [], 0
+        for value in values:
+            if value == 0:
+                run += 1
+            elif run:
+                gaps.append(run / 100)
+                run = 0
+        self.assertTrue(gaps and all(.45 <= g <= 1.15 for g in gaps), gaps)
+        self.assertNotEqual(values, [haptics.texture("joytoy", i / 100, seed=9.) for i in range(700)],
+                            "each clip gets its own random rhythm")
+
+    def test_ring_and_glitch_textures(self):
+        self.assertEqual([haptics.texture("ring", t) for t in (.1, .5, .8, 2.)], [1., 0., 1., 0.])
+        glitch = [haptics.texture("glitch", i / 50) for i in range(200)]
+        self.assertTrue(0 < sum(1 for v in glitch if v) < 200)
 
     def test_normalize_keeps_valid_and_drops_invalid(self):
         settings = haptics.normalize_settings({
@@ -376,6 +441,26 @@ class AppTests(unittest.TestCase):
         self.run_for(1.3, now)
         wait_for(lambda: (self.app.client.poll(), self.server.commands()[-1]["Scalars"][0]["Scalar"] == 0)[1])
 
+    def test_scene_events_reach_the_mixer(self):
+        self.beat()
+        now = self.run_for(.1, 100.)
+        self.beat(events=[(1, "romance:judy", 1, 10), (2, "joytoy", 1, 10)])
+        self.app.tick(now)
+        self.assertEqual(self.app.mixer.voices["romance"]["feel"], "track:judy")
+        self.assertEqual(self.app.mixer.voices["joytoy"]["feel"], "track:joytoy")
+        self.beat(events=[(3, "joytoy:end", 1, 10)])
+        self.app.tick(now + .1)
+        self.assertIn("release", self.app.mixer.voices["joytoy"])
+
+    def test_status_file_is_not_rewritten_needlessly(self):
+        self.app.write_status(10.)
+        first = (self.mod / "status.json").stat().st_mtime_ns
+        time.sleep(.02)
+        self.app.write_status(10.5)
+        self.assertEqual((self.mod / "status.json").stat().st_mtime_ns, first, "unchanged status waits a second")
+        self.app.write_status(11.1)
+        self.assertNotEqual((self.mod / "status.json").stat().st_mtime_ns, first)
+
     def test_inactive_game_ignores_events_but_test_buzz_plays(self):
         self.beat()
         now = self.run_for(.1, 100.)
@@ -393,7 +478,10 @@ class AppTests(unittest.TestCase):
                 connection.request(method, path, json.dumps(body) if body is not None else None,
                                    dict({"Content-Type": "application/json"}, **(headers or {})))
                 response = connection.getresponse()
-                return response.status, response.read()
+                try:
+                    return response.status, response.read()
+                finally:
+                    connection.close()
             status, page = call("GET", "/")
             self.assertEqual(status, 200)
             self.assertIn(b"Night City", page)
@@ -413,6 +501,18 @@ class AppTests(unittest.TestCase):
             self.assertEqual(call("POST", "/api/try", {"id": "nope"}, {"X-NCH": "1"})[0], 400)
             state = json.loads(call("GET", "/api/state", headers={"X-NCH-Catalog": "1"})[1])
             self.assertEqual(len(state["catalog"]["interactions"]), len(CATALOG["interactions"]))
+            # Keep-alive: the page reuses one connection; a rejected POST must not poison it.
+            connection = http.client.HTTPConnection("127.0.0.1", port, timeout=3)
+            connection.request("POST", "/api/settings", json.dumps({"max_strength": .9}), {"Content-Type": "application/json"})
+            response = connection.getresponse()
+            self.assertEqual((response.status, response.version), (403, 11))
+            response.read()
+            connection.request("GET", "/api/ping")
+            response = connection.getresponse()
+            self.assertEqual(json.loads(response.read())["app"], "night-city-haptics", "same connection still works")
+            connection.close()
+            self.assertEqual(call("POST", "/api/try", {"id": "romance"}, {"X-NCH": "1"})[0], 200)
+            self.assertEqual(self.app.mixer.voices["try:romance"]["feel"], "track:stout")
             self.assertEqual(call("POST", "/api/reset", {}, {"X-NCH": "1"})[0], 200)
             self.assertEqual(json.loads(self.settings.read_text())["max_strength"], .7)
             self.assertEqual(json.loads(self.settings.read_text())["intiface_address"], self.server.url,

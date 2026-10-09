@@ -293,7 +293,7 @@ function buildInteractions() {
       r.on = checkbox(false, item.label + ' on', on => save({interactions: {[item.id]: {on}}}, item.id + 'on'));
       r.feel = el('select');
       r.feel.setAttribute('aria-label', item.label + ' feel');
-      for (const f of catalog.feels[item.kind]) r.feel.append(new Option(f.label, f.id));
+      for (const f of catalog.feels[item.kind]) if (!f.for || f.for.includes(item.id)) r.feel.append(new Option(f.label, f.id));
       r.feel.onchange = () => save({interactions: {[item.id]: {feel: r.feel.value}}}, item.id + 'feel');
       r.num = el('span', {className: 'num'});
       r.range = slider(0, item.id, item.label + ' strength', v => { r.num.textContent = pct(v); save({interactions: {[item.id]: {strength: v}}}, item.id + 'str', 250); });

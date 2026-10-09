@@ -34,9 +34,10 @@ sys.path.insert(0, str(HERE))
 import buttplug  # noqa: E402
 import haptics  # noqa: E402
 
-VERSION = "0.2.1"
+VERSION = "0.2.2"
 PORT = 19870
 TICK = 1 / 30
+IDLE_TICK = 1 / 10   # while no game heartbeat is live and nothing plays
 ENGINE_RELEASE = "5.0.4"
 ENGINE_DOWNLOADS = {
     "linux-x86_64": ("intiface-engine-v5.0.4-linux-x64.zip",
@@ -189,6 +190,7 @@ class App:
         self.next_status = 0.
         self.started_engine_at = None
         self.history = []              # recent (time, output) samples for the page
+        self.status_written = (None, 0.)  # (content, time) of the last status.json
         self.stopping = False
         self.output = 0.
 
@@ -280,10 +282,11 @@ class App:
             active = self.game.active(now)
             live = self.game.live(now) and not self.game.state.get("paused")
             for name, magnitude, seconds in events:
+                rule = self.settings["interactions"].get(name.partition(":")[0])
                 if name == "test" and live:
                     self.mixer.trigger("test", 1, now, "double")
-                elif active and name in self.settings["interactions"]:
-                    self.mixer.trigger(name, magnitude, now, self.settings["interactions"][name]["feel"], seconds)
+                elif active and rule:
+                    self.mixer.game_event(name, magnitude, now, rule["feel"], seconds)
             if not active:
                 self.mixer.clear(keep=("try:", "test"))
             output, _ = self.mixer.tick(now, self.game.levels(now), self.settings)
@@ -302,14 +305,24 @@ class App:
                     self.next_connect = now + 1
             if now >= self.next_status:
                 self.next_status = now + .2
-                self.write_status()
+                self.write_status(now)
 
-    def write_status(self):
+    def busy(self, now):
+        """True while anything could need a fast tick: a live game or sound still playing."""
+        return self.game.live(now) or bool(self.mixer.voices) or self.output > 0
+
+    def write_status(self, now):
+        # The overlay reads this; CET treats it as fresh for 3 s, so unchanged content is
+        # rewritten once a second rather than five times.
         devices = [buttplug.summary(d)["name"] for d in self.client.devices.values()] if self.client else []
+        status = {"v": 2, "running": not self.stopping, "link": self.link, "devices": devices,
+                  "output": round(self.output, 2), "enabled": self.settings["enabled"]}
+        content, written = self.status_written
+        if status == content and now - written < 1:
+            return
         try:
-            write_json(self.mod_dir / "status.json", {"v": 2, "running": not self.stopping, "link": self.link,
-                                                     "devices": devices, "output": round(self.output, 3),
-                                                     "enabled": self.settings["enabled"]})
+            write_json(self.mod_dir / "status.json", status)
+            self.status_written = (status, now)
         except OSError:
             pass
 
@@ -337,8 +350,12 @@ class App:
                 raise ValueError("Unknown interaction")
             kind = self.mixer.kinds[name]
             if kind == "event":
-                seconds = 4 if rule["feel"] == "slowbuild" else None
-                self.mixer.trigger("try:" + name, 1, time.monotonic(), rule["feel"], seconds)
+                feel, seconds = rule["feel"], 4 if rule["feel"] == "slowbuild" else None
+                if feel == "scene":
+                    # A scene track squeezed into a few seconds gives its shape.
+                    track = {"romance": "stout"}.get(name, name)
+                    feel, seconds = "track:" + track, 8 if name == "romance" else None
+                self.mixer.trigger("try:" + name, 1, time.monotonic(), feel, seconds)
             else:
                 # Preview a level interaction as a 2.5 s burst of its texture.
                 self.mixer.effects["_level:" + name] = {"points": [[0, 1], [2.5, 1], [2.6, 0]], "texture": rule["feel"]}
@@ -363,7 +380,8 @@ class App:
             except Exception:
                 logging.exception("Unexpected error; output stopped for this tick")
                 self.output = 0.
-            time.sleep(max(0., TICK - (time.monotonic() - started)))
+            period = TICK if self.busy(started) else IDLE_TICK
+            time.sleep(max(0., period - (time.monotonic() - started)))
         with self.lock:
             self.disconnect("Stopped")
             self.engine.stop()
@@ -379,6 +397,9 @@ def make_server(app, port):
 
     class Handler(BaseHTTPRequestHandler):
         server_version = "NightCityHaptics/" + VERSION
+        # Keep-alive: the page polls ten times a second, and a new connection plus
+        # thread per poll cost more than the answer itself.
+        protocol_version = "HTTP/1.1"
 
         def log_message(self, *_):
             pass
@@ -416,11 +437,19 @@ def make_server(app, port):
             self.reply(404, {"error": "Not found"})
 
         def do_POST(self):
+            # Read the body first, even for a rejected request, so a kept-alive
+            # connection never parses leftover body bytes as the next request.
+            try:
+                length = max(0, int(self.headers.get("Content-Length", "0")))
+            except ValueError:
+                length = 0
+            data = self.rfile.read(min(length, 262144))
+            if length > 262144:
+                self.close_connection = True
             if not self.local() or self.headers.get("X-NCH") != "1":
                 return self.reply(403, {"error": "Rejected"})
             try:
-                length = int(self.headers.get("Content-Length", "0"))
-                body = json.loads(self.rfile.read(min(length, 262144)) or b"{}")
+                body = json.loads(data or b"{}")
                 action = self.path.rsplit("/", 1)[-1]
                 if action == "settings":
                     app.save(body)

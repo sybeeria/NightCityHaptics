@@ -167,8 +167,15 @@ VehicleComponent = {GetOwnerVehicleSpeed = function() return world.speed end}
 ScriptedPuppet = {GetActiveWeapon = function() return {GetItemID = function() return world.weapon end} end}
 WeaponObject = {GetWeaponType = function(id) return Enum.new("gamedataItemType", id) end}
 ImGuiCond, ImGuiWindowFlags = {FirstUseEver = 0}, {AlwaysAutoResize = 0}
+ImGuiCol = setmetatable({}, {__index = function(_, name) return name end})
+ImGuiStyleVar = {WindowRounding = "WindowRounding", FrameRounding = "FrameRounding"}
+local styleDepth = {color = 0, var = 0}
 local drawn = {}
-ImGui = setmetatable({Begin = function() return true end, Button = function(label) drawn[#drawn + 1] = label; return false end},
+ImGui = setmetatable({Begin = function() return true end, Button = function(label) drawn[#drawn + 1] = label; return false end,
+  PushStyleColor = function(index) assert(type(index) == "string", "unknown ImGuiCol"); styleDepth.color = styleDepth.color + 1 end,
+  PopStyleColor = function(n) styleDepth.color = styleDepth.color - (n or 1) end,
+  PushStyleVar = function(index) assert(index, "unknown ImGuiStyleVar"); styleDepth.var = styleDepth.var + 1 end,
+  PopStyleVar = function(n) styleDepth.var = styleDepth.var - (n or 1) end},
   {__index = function() return function() end end})
 
 local events, hooks, hotkeys = {}, {}, {}
@@ -314,6 +321,7 @@ check(#state().events == count, "no gameplay events with the overlay open")
 for _, label in ipairs(drawn) do drawn[_] = nil end
 events.onDraw()
 check(#drawn == 2, "overlay has two buttons (pause, test)")
+check(styleDepth.color == 0 and styleDepth.var == 0, "overlay pops every style it pushes")
 hotkeys.nchTest()
 check(last()[2] == "test", "test buzz works with the overlay open")
 events.onOverlayClose(); frames(.1)

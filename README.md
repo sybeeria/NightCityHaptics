@@ -21,24 +21,26 @@ run Intiface Central on its default port (12345), the app uses that instead.
 
 ## Setup
 
-1. Download [`NightCityHaptics-0.2.0.zip`](dist/NightCityHaptics-0.2.0.zip). Extract it into the
+1. Download [`NightCityHaptics-0.2.1.zip`](dist/NightCityHaptics-0.2.1.zip). Extract it into the
    game folder, the one that contains `bin`.
 2. Open `bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/` and run
    **`start.cmd`** on Windows or **`start.sh`** on Linux. The control page opens in your browser.
-3. On the first run, click **Download** on the Intiface tile. Put your device in pairing mode and
-   the app finds it.
+3. On the first run, click **Download** under Intiface at the top of the page. Put your device
+   in pairing mode and the app finds it.
 4. Play. Feedback runs only during live gameplay. Menus, pause, loading screens and photo mode stay
    silent.
 
 ## Using it
 
-- **Interactions:** switch each one on or off, pick a feel, set its strength and press **Try** to
-  feel it. Every interaction is a share of **Max strength**, and the total never goes above it.
-- **Stop everything:** use the power button on the page, or **Pause** in the CET overlay. Both
-  Pause and **Test buzz** can be bound to hotkeys in CET's Bindings.
+- **Interactions:** grouped and collapsible. Switch each one on or off (or a whole group), pick a
+  feel, set its strength and press **Try** to feel it. Every interaction is a share of
+  **Max strength**, and the total never goes above it.
+- **Stop everything:** use the **On/Off** button at the top of the page, or **Pause** in the CET
+  overlay. Both Pause and **Test buzz** can be bound to hotkeys in CET's Bindings.
 - **Devices:** set strength per device, choose whether every motor runs, and **Test** or
   **Scan** again.
 - **No device yet?** The live meter shows exactly what would be sent.
+- **Settings** (under Devices) holds the Intiface address and auto-start, and a reset to defaults.
 - **Quit** (top right) stops your devices and Intiface. Settings save automatically to
   `companion/settings.json`.
 
@@ -53,8 +55,8 @@ run Intiface Central on its default port (12345), the app uses that instead.
 
 ## Troubleshooting
 
-- **Device not found:** close its phone app, which holds the connection. Then press **Scan** on
-  the Devices tab. On Linux, Bluetooth must be on (BlueZ).
+- **Device not found:** close its phone app, which holds the connection. Then press **Scan** under
+  Devices. On Linux, Bluetooth must be on (BlueZ).
 - **`start.cmd` says Python is missing:** install it from python.org, and keep the "py launcher"
   option ticked.
 - **Logs:** `%LOCALAPPDATA%\NightCityHaptics\` on Windows, or `~/.local/share/night-city-haptics/`
@@ -93,7 +95,7 @@ python3 tools/e2e_intiface.py                 # Linux: real Intiface Engine + si
 
 ## Status
 
-This is a prototype (0.2.0). It passed offline tests and an end-to-end run through the real
+This is a prototype (0.2.1). It passed offline tests and an end-to-end run through the real
 Intiface Engine with a simulated device. It also passed a run on Windows Python. In-game coverage
 is still limited, so please open an issue if something misfires.
 

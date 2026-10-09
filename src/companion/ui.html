@@ -5,265 +5,230 @@
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Night City Haptics</title>
 <style>
+/* Archivo, SIL Open Font License 1.1: fonts/OFL.txt */
+@font-face{font-family:"Archivo";src:url("/fonts/archivo.woff2") format("woff2");font-weight:400 900;font-display:swap}
+/* Paper, black, graphite, rule, signal red. Red only means: on, live, the limit, or a problem. */
 :root{
-  --bg:#08090b;--panel:#101217;--panel2:#151820;--line:#252a33;--line2:#323844;
-  --text:#ecebe4;--muted:#8a909b;--dim:#5d636e;
-  --yellow:#f3e600;--cyan:#4ff0ff;--red:#ff3b55;--green:#39f5a0;
-  --head:"Rajdhani","Bahnschrift","DIN Alternate","Barlow Condensed","Roboto Condensed","Arial Narrow",sans-serif;
-  --body:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
-  --mono:ui-monospace,"Cascadia Mono","JetBrains Mono",Consolas,monospace;
-  color-scheme:dark;
+  --ink:#000;--paper:#fff;--grey:#5c5c5c;--faint:#8c8c8c;--rule:#dadada;--red:#e10600;--red-dark:#b30500;
+  --font:"Archivo","Helvetica Neue",Arial,sans-serif;
+  color-scheme:light;
 }
 *{box-sizing:border-box}
-html{background:var(--bg)}
-body{margin:0;color:var(--text);font:15px/1.45 var(--body);min-height:100vh;
-  background:
-    linear-gradient(rgba(255,255,255,.018) 1px,transparent 1px) 0 0/100% 4px,
-    radial-gradient(1200px 500px at 85% -10%,rgba(79,240,255,.07),transparent 60%),
-    radial-gradient(900px 400px at -10% 0%,rgba(243,230,0,.05),transparent 60%),var(--bg)}
-.wrap{max-width:1080px;margin:0 auto;padding:22px 20px 60px}
+html{background:var(--paper)}
+body{margin:0;color:var(--ink);font:16px/1.4 var(--font);min-height:100vh}
 button,select,input{font:inherit;color:inherit}
-.clip{clip-path:polygon(0 0,calc(100% - 14px) 0,100% 14px,100% 100%,14px 100%,0 calc(100% - 14px))}
-.h{font-family:var(--head);text-transform:uppercase;letter-spacing:.08em;font-weight:700}
+h1,h2,h3,p{margin:0}
+a{color:var(--ink)}
+:focus-visible{outline:2px solid var(--red);outline-offset:2px}
+
+/* type scale 14 / 16 / 21 / 24 / 28 / 36 / 168, one family; headings in sentence case.
+   The output number is the one loud thing; section titles stay below the app name. */
+.title{font-size:28px;font-weight:900;letter-spacing:-.5px;line-height:1}
+.sub{font-size:16px;font-weight:800}
+.meta{font-size:14px;color:var(--grey)}
+.name{font-size:21px;font-weight:800;letter-spacing:-.3px;line-height:1.15}
+.num{font-size:24px;font-weight:900;letter-spacing:-.5px;text-align:right;font-variant-numeric:tabular-nums}
+
+.page{max-width:1180px;margin:0 auto;padding:32px 24px 40px}
 
 /* header */
-header{display:flex;align-items:center;gap:14px;margin-bottom:20px}
-.logo{width:42px;height:42px;background:var(--yellow);color:#000;display:grid;place-items:center;
-  font:800 17px/1 var(--head);letter-spacing:.02em;clip-path:polygon(0 0,100% 0,100% 70%,70% 100%,0 100%)}
-.title{font:700 26px/1 var(--head);letter-spacing:.12em;text-transform:uppercase}
-.title b{color:var(--yellow);font-weight:700}
-.sub{color:var(--muted);font-size:12px;letter-spacing:.2em;text-transform:uppercase;font-family:var(--head);margin-top:3px}
-header .grow{flex:1}
+.top{display:flex;flex-wrap:wrap;align-items:flex-start;justify-content:space-between;gap:16px 32px;margin-bottom:32px}
+.top h1{font-size:36px;font-weight:900;line-height:.92;letter-spacing:-.8px}
+.status{display:flex;flex-wrap:wrap;gap:12px 32px;margin:0}
+.status > div{min-width:110px;max-width:230px}
+.status dd{margin:0}
+.status .v{font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.status .d{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.status .a:not(:empty){margin-top:8px}
+.status .bad .v{color:var(--red)}
+.status .wait .v{animation:blink 1.3s ease-in-out infinite}
+@keyframes blink{50%{opacity:.35}}
+.actions{display:flex;gap:8px}
 
-.btn{background:var(--panel2);border:1px solid var(--line2);padding:8px 14px;cursor:pointer;
-  font:700 13px/1 var(--head);letter-spacing:.12em;text-transform:uppercase;color:var(--text);
-  clip-path:polygon(0 0,calc(100% - 8px) 0,100% 8px,100% 100%,8px 100%,0 calc(100% - 8px));transition:background .15s,border-color .15s}
-.btn:hover{background:#1d212b;border-color:var(--muted)}
-.btn.primary{background:var(--yellow);color:#000;border-color:var(--yellow)}
-.btn.primary:hover{background:#fff35a}
-.btn.ghost{background:transparent}
-.btn.danger:hover{border-color:var(--red);color:var(--red)}
-.btn:disabled{opacity:.35;cursor:default}
-.btn.small{padding:6px 10px;font-size:12px}
+/* buttons: pill (action), pill.on (a state that is on), link (quiet text action) */
+.pill{background:var(--paper);border:2px solid var(--ink);border-radius:999px;padding:9px 18px;min-height:44px;font-weight:700;cursor:pointer;white-space:nowrap}
+.pill:hover{border-color:var(--red);color:var(--red)}
+.pill.on{background:var(--red);border-color:var(--red);color:#fff}
+.pill.on:hover{background:var(--red-dark);border-color:var(--red-dark);color:#fff}
+.pill.small{padding:4px 14px;min-height:34px;font-size:14px}
+.pill:disabled{opacity:.3;cursor:default;border-color:var(--ink);color:var(--ink)}
+.link{background:none;border:0;padding:6px 0;cursor:pointer;font-size:14px;color:var(--grey)}
+.link:hover{color:var(--red)}
 
-/* status strip */
-.status{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:14px}
-.tile{background:var(--panel);border:1px solid var(--line);padding:14px 16px 14px 18px;position:relative;min-height:92px}
-.tile::before{content:"";position:absolute;left:0;top:14px;bottom:14px;width:3px;background:var(--dim)}
-.tile.ok::before{background:var(--green);box-shadow:0 0 12px var(--green)}
-.tile.warn::before{background:var(--yellow);box-shadow:0 0 12px var(--yellow)}
-.tile.bad::before{background:var(--red);box-shadow:0 0 12px var(--red)}
-.tile .label{font:700 11px/1 var(--head);letter-spacing:.22em;color:var(--muted);text-transform:uppercase}
-.tile .value{font:700 19px/1.15 var(--head);letter-spacing:.04em;margin:7px 0 3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.tile .detail{color:var(--muted);font-size:13px}
-.tile .act{margin-top:9px}
-.pulse{animation:pulse 1.3s ease-in-out infinite}
-@keyframes pulse{50%{opacity:.35}}
+/* layout: two columns of blocks; every block = thick rule + a head row */
+.grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:48px 24px;align-items:start}
+.left{grid-column:1/span 5;display:flex;flex-direction:column;gap:48px}
+.right{grid-column:7/-1}
+.block{border-top:6px solid var(--ink)}
+.head{display:flex;align-items:baseline;justify-content:space-between;gap:12px;padding:14px 0 12px}
+.head.toggle{width:100%;background:none;border:0;cursor:pointer;text-align:left}
+.head.toggle:hover .title{color:var(--red)}
+.sign{width:16px;text-align:right;font-weight:700;font-size:21px;line-height:1}
 
-/* hero */
-.hero{display:grid;grid-template-columns:auto 1fr 250px;gap:0;background:var(--panel);border:1px solid var(--line);margin-bottom:22px}
-.hero > div{padding:20px 22px}
-.hero > div + div{border-left:1px solid var(--line)}
-.power{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-width:170px}
-.powerbtn{width:96px;height:96px;border-radius:50%;border:2px solid var(--line2);background:radial-gradient(circle at 50% 40%,#1b1f27,#0d0f13);
-  cursor:pointer;display:grid;place-items:center;transition:all .2s;position:relative}
-.powerbtn svg{width:38px;height:38px;stroke:var(--dim);transition:stroke .2s}
-.powerbtn.on{border-color:var(--yellow);box-shadow:0 0 0 4px rgba(243,230,0,.08),0 0 28px rgba(243,230,0,.35)}
-.powerbtn.on svg{stroke:var(--yellow)}
-.powerlabel{font:700 13px/1 var(--head);letter-spacing:.2em;text-transform:uppercase;color:var(--muted)}
-.powerlabel.on{color:var(--yellow)}
-.meter{display:flex;flex-direction:column;gap:6px;min-width:0}
-.meter .top{display:flex;align-items:baseline;gap:12px}
-.big{font:700 54px/1 var(--head);letter-spacing:.02em;color:var(--cyan);text-shadow:0 0 18px rgba(79,240,255,.35);font-variant-numeric:tabular-nums;min-width:2.6em}
-.why{color:var(--muted);font-size:13px;min-height:1.3em;display:flex;flex-wrap:wrap;gap:6px}
-.chip{border:1px solid rgba(79,240,255,.35);color:var(--cyan);padding:1px 8px;font:600 12px/1.6 var(--head);letter-spacing:.08em;text-transform:uppercase}
-canvas{width:100%;height:70px;display:block}
-.master .label{font:700 11px/1 var(--head);letter-spacing:.22em;color:var(--muted);text-transform:uppercase}
-.master .num{font:700 34px/1 var(--head);margin:8px 0 10px;font-variant-numeric:tabular-nums}
-.master p{margin:10px 0 0;color:var(--muted);font-size:12.5px}
+/* controls */
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:24px;background:transparent;cursor:pointer;margin:0;--fill:var(--ink)}
+input[type=range]::-webkit-slider-runnable-track{height:2px;background:linear-gradient(90deg,var(--fill) var(--p,50%),var(--rule) var(--p,50%))}
+input[type=range]::-moz-range-track{height:2px;background:linear-gradient(90deg,var(--fill) var(--p,50%),var(--rule) var(--p,50%))}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-6px;border-radius:50%;background:var(--fill);border:0}
+input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--fill);border:0}
+input[type=range].limit{--fill:var(--red)}
+input[type=checkbox]{width:20px;height:20px;margin:0;accent-color:var(--ink);cursor:pointer;flex:none}
+select{background:transparent;border:0;border-bottom:1px solid var(--ink);border-radius:0;padding:2px 18px 2px 0;font-size:14px;cursor:pointer;
+  -webkit-appearance:none;appearance:none;
+  background-image:linear-gradient(45deg,transparent 50%,var(--ink) 50%),linear-gradient(135deg,var(--ink) 50%,transparent 50%);
+  background-position:calc(100% - 9px) 55%,calc(100% - 5px) 55%;background-size:4px 4px;background-repeat:no-repeat}
+input[type=text]{width:100%;border:0;border-bottom:1px solid var(--ink);padding:6px 0;background:transparent}
+.check{display:flex;align-items:center;gap:8px;cursor:pointer}
+/* label, slider, number: used for max strength and device strength */
+.level{display:grid;grid-template-columns:76px minmax(0,1fr) 52px;align-items:center;gap:12px}
 
-/* sliders + switches */
-input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:22px;background:transparent;cursor:pointer;margin:0}
-input[type=range]::-webkit-slider-runnable-track{height:4px;background:linear-gradient(90deg,var(--yellow) var(--p,50%),var(--line2) var(--p,50%))}
-input[type=range]::-moz-range-track{height:4px;background:linear-gradient(90deg,var(--yellow) var(--p,50%),var(--line2) var(--p,50%))}
-input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:12px;height:18px;margin-top:-7px;background:var(--text);border:0;clip-path:polygon(0 0,100% 0,100% 75%,50% 100%,0 75%)}
-input[type=range]::-moz-range-thumb{width:12px;height:18px;background:var(--text);border:0;border-radius:0}
-input[type=range]:disabled{opacity:.3}
-.sw{position:relative;width:42px;height:22px;flex:none;cursor:pointer;display:inline-block}
-.sw input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
-.sw span{position:absolute;inset:0;border:1px solid var(--line2);background:#0c0e12;transition:.15s}
-.sw span::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;background:var(--dim);transition:.15s}
-.sw input:checked + span{border-color:var(--yellow);background:rgba(243,230,0,.12)}
-.sw input:checked + span::after{left:23px;background:var(--yellow)}
-.sw input:focus-visible + span{outline:2px solid var(--cyan);outline-offset:2px}
-select{background:#0c0e12;border:1px solid var(--line2);padding:6px 28px 6px 10px;cursor:pointer;-webkit-appearance:none;appearance:none;
-  background-image:linear-gradient(45deg,transparent 50%,var(--muted) 50%),linear-gradient(135deg,var(--muted) 50%,transparent 50%);
-  background-position:calc(100% - 14px) 50%,calc(100% - 9px) 50%;background-size:5px 5px;background-repeat:no-repeat;font-size:13.5px}
-select:disabled{opacity:.35}
-input[type=text]{background:#0c0e12;border:1px solid var(--line2);padding:8px 10px;width:100%;font-family:var(--mono);font-size:13px}
-
-/* tabs */
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);margin-bottom:18px}
-.tab{background:none;border:0;padding:10px 16px;cursor:pointer;font:700 15px/1 var(--head);letter-spacing:.14em;text-transform:uppercase;color:var(--muted);border-bottom:2px solid transparent;margin-bottom:-1px}
-.tab:hover{color:var(--text)}
-.tab.active{color:var(--yellow);border-bottom-color:var(--yellow)}
-.tab .count{color:var(--dim);font-size:12px;margin-left:4px}
-.panel{display:none}.panel.active{display:block}
+/* output */
+.huge{font-size:clamp(96px,14vw,168px);font-weight:900;line-height:.8;letter-spacing:-.04em;margin:4px 0 24px;font-variant-numeric:tabular-nums}
+.huge span{font-size:.38em;letter-spacing:0;color:var(--red)}
+#bars{display:block;width:100%;height:44px;margin-bottom:24px}
+#why{text-align:right;max-width:65%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 
 /* interactions */
-.cat{margin-bottom:26px}
-.cathead{display:flex;align-items:center;gap:12px;margin-bottom:8px}
-.cathead .name{font:700 18px/1 var(--head);letter-spacing:.16em;text-transform:uppercase}
-.cathead .n{color:var(--dim);font:600 13px/1 var(--head);letter-spacing:.1em}
-.cathead .line{flex:1;height:1px;background:linear-gradient(90deg,var(--line2),transparent)}
-.rows{background:var(--panel);border:1px solid var(--line)}
-.row{display:grid;grid-template-columns:42px minmax(0,1fr) 150px 210px 64px;align-items:center;gap:16px;padding:12px 16px 12px 18px;position:relative;border-top:1px solid var(--line)}
-.row:first-child{border-top:0}
-.row .glow{position:absolute;left:0;top:0;bottom:0;width:3px;background:var(--cyan);opacity:0;box-shadow:0 0 14px var(--cyan);transition:opacity .08s}
-.row.off .info,.row.off .ctrl{opacity:.42}
-.info .nm{font-weight:600}
-.info .ds{color:var(--muted);font-size:13px;margin-top:1px}
-.kind{font:700 10px/1 var(--head);letter-spacing:.16em;color:var(--dim);margin-left:8px;vertical-align:2px}
-.strength{display:flex;align-items:center;gap:10px}
-.strength output{font:600 14px/1 var(--mono);color:var(--muted);width:3.2em;text-align:right}
-.catbtns{display:flex;gap:6px}
+.cat .head{border-bottom:2px solid var(--ink);padding:16px 0 8px}
+.cat .bulk{display:none;gap:16px}
+.cat.open .bulk{display:flex}
+.cat .list{display:none}
+.cat.open .list{display:block}
+.cat .tog{flex:1;background:none;border:0;padding:0;cursor:pointer;text-align:left}
+.cat .tog:hover .sub{color:var(--red)}
+.row{display:grid;grid-template-columns:28px minmax(0,1fr) 52px 60px;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--rule)}
+.row .ctl{display:flex;align-items:center;gap:12px;margin-top:6px}
+.row select{width:132px;flex:none}
+.row .num{transition:color .1s}
+.row.live .num{color:var(--red)}
+.row.off .name,.row.off .num{color:var(--faint)}
+.row.off .ctl{opacity:.45}
 
 /* devices */
-.devices{display:grid;gap:12px}
-.dev{background:var(--panel);border:1px solid var(--line);padding:16px 18px;display:grid;grid-template-columns:42px minmax(0,1fr) 230px auto;gap:16px;align-items:center}
-.dev .nm{font:700 18px/1.1 var(--head);letter-spacing:.05em}
-.motors{display:flex;gap:5px;flex-wrap:wrap;margin-top:5px}
-.motors span{font:600 11px/1.5 var(--head);letter-spacing:.1em;text-transform:uppercase;color:var(--muted);border:1px solid var(--line2);padding:0 6px}
-.extra{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:13px;margin-top:8px}
-.empty{background:var(--panel);border:1px dashed var(--line2);padding:26px;text-align:center;color:var(--muted)}
-.empty .h{color:var(--text);font-size:18px;margin-bottom:6px}
-.toolbar{display:flex;align-items:center;gap:12px;margin-bottom:14px;color:var(--muted);font-size:13.5px}
+.dev{display:flex;flex-direction:column;gap:12px;padding:12px 0 16px;border-bottom:1px solid var(--rule)}
+.dev .id{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
+.dev .foot{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px 24px}
+.dev .opts{display:flex;flex-wrap:wrap;gap:8px 24px}
+.empty{padding:4px 0 16px;display:flex;flex-direction:column;gap:4px}
+#scanstate:not(:empty){padding:12px 0}
 
 /* settings */
-.cards{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-.card{background:var(--panel);border:1px solid var(--line);padding:18px}
-.card .h{font-size:15px;margin-bottom:10px;color:var(--yellow)}
-.card p{color:var(--muted);font-size:13.5px;margin:8px 0}
-.field{display:flex;align-items:center;justify-content:space-between;gap:14px;margin:12px 0}
-code{font-family:var(--mono);font-size:12.5px;background:#0c0e12;border:1px solid var(--line);padding:1px 5px;color:var(--cyan);word-break:break-all}
-kbd{font:600 12px/1 var(--head);letter-spacing:.08em;border:1px solid var(--line2);padding:2px 6px;color:var(--text)}
+.settings{display:flex;flex-direction:column}
+.settings[hidden]{display:none}
+.settings > div{border-top:1px solid var(--rule);padding:16px 0;display:flex;flex-direction:column;gap:12px}
+.settings > div:first-child{border-top:0;padding-top:4px}
+.settings .btns{display:flex;flex-wrap:wrap;gap:8px}
+code{font:14px ui-monospace,Consolas,monospace;word-break:break-all}
 
-.toast{position:fixed;right:18px;bottom:18px;background:var(--panel2);border:1px solid var(--line2);border-left:3px solid var(--green);padding:10px 16px;font:700 13px/1 var(--head);letter-spacing:.12em;text-transform:uppercase;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}
+footer{margin-top:48px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 24px}
+.toast{position:fixed;right:16px;bottom:16px;background:var(--ink);color:#fff;padding:10px 16px;font-weight:700;font-size:14px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}
 .toast.show{opacity:1;transform:none}
-.toast.err{border-left-color:var(--red)}
-.offline{position:fixed;inset:0;background:rgba(8,9,11,.92);display:none;place-items:center;text-align:center;z-index:5}
+.toast.err{background:var(--red)}
+.offline{position:fixed;inset:0;background:rgba(255,255,255,.96);display:none;place-items:center;padding:24px;z-index:5}
 .offline.show{display:grid}
-.offline .h{font-size:24px;color:var(--yellow)}
-.offline p{color:var(--muted)}
-.foot{margin-top:30px;color:var(--dim);font-size:12.5px;display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.offline > div{max-width:560px;display:flex;flex-direction:column;gap:12px}
+.offline h2{font-size:44px;font-weight:900;line-height:1;letter-spacing:-1px}
 
-@media (max-width:860px){
-  .status{grid-template-columns:1fr}
-  .hero{grid-template-columns:1fr}
-  .hero > div + div{border-left:0;border-top:1px solid var(--line)}
-  .power{flex-direction:row;justify-content:flex-start;gap:16px}
-  .powerbtn{width:64px;height:64px}
-  .row{grid-template-columns:42px minmax(0,1fr) 64px;row-gap:8px}
-  .row .feel{grid-column:2}
-  .row .strength{grid-column:2/4}
-  .row .trybtn{grid-row:1;grid-column:3}
-  .dev{grid-template-columns:42px minmax(0,1fr)}
-  .dev .strength,.dev .btn{grid-column:2}
-  .cards{grid-template-columns:1fr}
+@media (max-width:900px){
+  .left,.right{grid-column:1/-1}
+}
+@media (max-width:560px){
+  .page{padding:24px 16px 32px}
+  .row{grid-template-columns:28px minmax(0,1fr) 60px;row-gap:4px}
+  .row > :nth-child(-n+2){grid-row:1/3}
+  .row .try{grid-column:3;grid-row:2}
+  #why{max-width:55%}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 </style>
 </head>
 <body>
-<div class="wrap">
-  <header>
-    <div class="logo">NCH</div>
-    <div>
-      <div class="title">Night City <b>Haptics</b></div>
-      <div class="sub">Cyberpunk 2077 · Intiface · <span id="ver"></span></div>
+<div class="page">
+  <header class="top">
+    <h1>Night City<br>Haptics</h1>
+    <dl class="status">
+      <div id="st-link"><dt class="meta">Intiface</dt><dd class="v">…</dd><dd class="d meta"></dd><dd class="a"></dd></div>
+      <div id="st-dev"><dt class="meta">Device</dt><dd class="v">…</dd><dd class="d meta"></dd><dd class="a"></dd></div>
+      <div id="st-game"><dt class="meta">Game</dt><dd class="v">…</dd><dd class="d meta"></dd><dd class="a"></dd></div>
+    </dl>
+    <div class="actions">
+      <button class="pill on" id="power" aria-pressed="true" aria-label="Feedback" title="Turn all feedback on or off">On</button>
+      <button class="pill" id="quit" title="Stop all devices and close the app">Quit</button>
     </div>
-    <div class="grow"></div>
-    <button class="btn ghost danger" id="quit" title="Stop all devices and close the app">Quit</button>
   </header>
 
-  <section class="status">
-    <div class="tile clip" id="t-link"><div class="label">Intiface</div><div class="value" id="link-v">…</div><div class="detail" id="link-d"></div><div class="act" id="link-a"></div></div>
-    <div class="tile clip" id="t-dev"><div class="label">Device</div><div class="value" id="dev-v">…</div><div class="detail" id="dev-d"></div><div class="act" id="dev-a"></div></div>
-    <div class="tile clip" id="t-game"><div class="label">Game</div><div class="value" id="game-v">…</div><div class="detail" id="game-d"></div></div>
-  </section>
+  <main class="grid">
+    <div class="left">
+      <section class="block" aria-labelledby="h-output">
+        <div class="head"><h2 class="title" id="h-output">Output</h2><span class="meta" id="why"></span></div>
+        <div class="huge"><span id="out" style="font-size:inherit;letter-spacing:inherit;color:inherit">0</span><span>%</span></div>
+        <canvas id="bars" role="img" aria-label="Output over the last five seconds; the red line is max strength"></canvas>
+        <div class="level">
+          <label for="master" title="Nothing goes above this. Every interaction is a share of it.">Max</label>
+          <input type="range" class="limit" id="master" min="0" max="100" step="1">
+          <span class="num" id="masterv">70</span>
+        </div>
+      </section>
 
-  <section class="hero clip">
-    <div class="power">
-      <button class="powerbtn" id="power" aria-label="Feedback on or off">
-        <svg viewBox="0 0 24 24" fill="none" stroke-width="2.2" stroke-linecap="round"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>
-      </button>
-      <div class="powerlabel" id="powerlabel">Feedback</div>
+      <section class="block" aria-labelledby="h-devices">
+        <div class="head"><h2 class="title" id="h-devices">Devices</h2><button class="pill small" id="scan">Scan</button></div>
+        <div id="devlist"></div>
+        <p class="meta" id="scanstate"></p>
+      </section>
+
+      <section class="block" id="settings" aria-labelledby="h-settings">
+        <button class="head toggle" id="settoggle" aria-expanded="false" aria-controls="setbody"><h2 class="title" id="h-settings">Settings</h2><span class="sign" id="setsign">+</span></button>
+        <div class="settings" id="setbody" hidden>
+          <div>
+            <h3 class="sub">Intiface</h3>
+            <label class="check"><input type="checkbox" id="autostart">Start Intiface Engine when no Intiface app is running</label>
+            <label for="address" class="meta">Address</label>
+            <input type="text" id="address" spellcheck="false">
+            <p class="meta" id="enginepath"></p>
+            <div class="btns"><button class="pill small" id="reconnect">Reconnect</button><button class="pill small" id="download">Download engine</button></div>
+          </div>
+          <div>
+            <h3 class="sub">In game</h3>
+            <p class="meta">Open the CET overlay for Pause and Test buzz, or bind both as hotkeys in CET’s Bindings. Menus, loading screens and photo mode stay silent.</p>
+          </div>
+          <div>
+            <h3 class="sub">Defaults</h3>
+            <p class="meta">Puts every interaction back to its default switch, feel and strength.</p>
+            <div class="btns"><button class="pill small" id="reset">Reset interactions</button></div>
+          </div>
+          <div>
+            <h3 class="sub">Other mods</h3>
+            <p class="meta">CET mods can pulse through the Other mods interaction (strength 0–1, seconds optional):</p>
+            <code>GetMod("nightCityHaptics").Pulse(0.8, 2)</code>
+          </div>
+        </div>
+      </section>
     </div>
-    <div class="meter">
-      <div class="top"><div class="big" id="out">0%</div><div class="why" id="why"></div></div>
-      <canvas id="spark" width="600" height="70" aria-label="Output over the last five seconds"></canvas>
-    </div>
-    <div class="master">
-      <div class="label">Max strength</div>
-      <div class="num" id="masterv">70%</div>
-      <input type="range" id="master" min="0" max="100" step="1">
-      <p>Nothing ever goes above this. Each interaction's strength is a share of it.</p>
-    </div>
-  </section>
 
-  <nav class="tabs" role="tablist">
-    <button class="tab active" data-tab="interactions">Interactions<span class="count" id="icount"></span></button>
-    <button class="tab" data-tab="devices">Devices<span class="count" id="dcount"></span></button>
-    <button class="tab" data-tab="settings">Settings</button>
-  </nav>
+    <section class="block right" aria-labelledby="h-interactions">
+      <div class="head"><h2 class="title" id="h-interactions">Interactions</h2><span class="meta" id="icount"></span></div>
+      <div id="cats"></div>
+    </section>
+  </main>
 
-  <section class="panel active" id="p-interactions"></section>
-
-  <section class="panel" id="p-devices">
-    <div class="toolbar"><button class="btn" id="scan">Scan for devices</button><span id="scanstate"></span></div>
-    <div class="devices" id="devlist"></div>
-  </section>
-
-  <section class="panel" id="p-settings">
-    <div class="cards">
-      <div class="card clip">
-        <div class="h">Intiface</div>
-        <div class="field"><span>Start Intiface Engine automatically when no Intiface app is running</span><label class="sw"><input type="checkbox" id="autostart"><span></span></label></div>
-        <p>Address</p>
-        <input type="text" id="address" spellcheck="false">
-        <p id="enginepath"></p>
-        <div class="catbtns"><button class="btn small" id="reconnect">Reconnect</button><button class="btn small" id="download">Download Intiface Engine</button></div>
-      </div>
-      <div class="card clip">
-        <div class="h">In game</div>
-        <p>Open the CET overlay for a small Night City Haptics window with <b>Pause</b> and <b>Test buzz</b>.</p>
-        <p>For hotkeys, bind <kbd>Pause / resume haptics</kbd> and <kbd>Test buzz</kbd> under CET → Bindings.</p>
-        <p>Output only flows during gameplay: menus, pause, loading screens, photo mode and the CET overlay are always silent.</p>
-      </div>
-      <div class="card clip">
-        <div class="h">Defaults</div>
-        <p>Put every interaction back to its default on/off, strength and feel. Device settings and Intiface options stay.</p>
-        <button class="btn small danger" id="reset">Reset interactions</button>
-      </div>
-      <div class="card clip">
-        <div class="h">For mod authors</div>
-        <p>Other CET mods can send a pulse through the <b>Other mods</b> interaction:</p>
-        <p><code>GetMod("nightCityHaptics").Pulse(0.8, 2)</code></p>
-        <p>Strength 0–1, length in seconds (optional).</p>
-      </div>
-    </div>
-  </section>
-
-  <div class="foot"><span>Settings save automatically.</span><span>Close this tab any time — the app keeps running until you press Quit.</span></div>
+  <footer class="meta"><span>Changes save as you make them. The app keeps running until you press Quit.</span><span id="ver"></span></footer>
 </div>
-<div class="toast" id="toast"></div>
-<div class="offline" id="offline"><div><div class="h">Night City Haptics is not running</div><p>Start it again: <b>start.cmd</b> (Windows) or <b>start.sh</b> (Linux) in the mod's companion folder, or your shortcut.</p></div></div>
+<div class="toast" id="toast" role="status"></div>
+<div class="offline" id="offline"><div><h2>Night City Haptics is not running</h2><p class="meta">Start it again with start.cmd on Windows or start.sh on Linux, in the mod’s companion folder, or with your shortcut. This page reconnects by itself.</p></div></div>
 
 <script>
 const $ = id => document.getElementById(id);
-let S = null, catalog = null, failures = 0, editing = new Set();
-const pct = v => Math.round(v * 100) + '%';
+const pct = v => Math.round(v * 100);
+let S = null, catalog = null, failures = 0;
+const editing = new Set();          // sliders being dragged: the server doesn't overwrite them
+const rows = {};                    // interaction id -> its elements
 
+// ---- helpers ----
+function el(tag, props = {}, ...children) {
+  const e = Object.assign(document.createElement(tag), props);
+  e.append(...children);
+  return e;
+}
 async function api(path, body) {
   const res = await fetch('/api/' + path, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-NCH': '1'}, body: JSON.stringify(body || {})});
   const data = await res.json().catch(() => ({}));
@@ -272,167 +237,187 @@ async function api(path, body) {
 }
 let toastTimer;
 function toast(text, err) {
-  const t = $('toast'); t.textContent = text; t.className = 'toast show' + (err ? ' err' : '');
+  const t = $('toast');
+  t.textContent = text; t.className = 'toast show' + (err ? ' err' : '');
   clearTimeout(toastTimer); toastTimer = setTimeout(() => t.className = 'toast', 1600);
 }
 const timers = {};
 function save(change, key, delay = 0) {
   clearTimeout(timers[key]);
-  timers[key] = setTimeout(() => api('settings', change).then(() => toast('Saved')).catch(() => {}), delay);
+  timers[key] = setTimeout(() => api('settings', change).catch(() => {}), delay);
 }
-function fill(range) { range.style.setProperty('--p', (range.value - range.min) / (range.max - range.min) * 100 + '%'); }
-function el(tag, cls, html) { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; }
-function esc(s) { return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
-function sw(checked, onchange) {
-  const l = el('label', 'sw'); const i = el('input'); i.type = 'checkbox'; i.checked = checked;
-  i.addEventListener('change', () => onchange(i.checked)); l.append(i, el('span')); return l;
-}
-function range(value, onchange, key) {
-  const r = el('input'); r.type = 'range'; r.min = 0; r.max = 100; r.step = 1; r.value = Math.round(value * 100); fill(r);
+function fill(r) { r.style.setProperty('--p', r.value + '%'); }
+function track(r, key, onchange) {
   r.addEventListener('pointerdown', () => editing.add(key));
   r.addEventListener('pointerup', () => setTimeout(() => editing.delete(key), 600));
   r.addEventListener('input', () => { fill(r); onchange(r.value / 100); });
+}
+function slider(value, key, label, onchange) {
+  const r = el('input', {type: 'range', min: 0, max: 100, step: 1, value: pct(value)});
+  r.setAttribute('aria-label', label);
+  fill(r); track(r, key, onchange);
   return r;
 }
+function setSlider(r, value, key) { if (!editing.has(key)) { r.value = pct(value); fill(r); } }
+function checkbox(checked, label, onchange) {
+  const c = el('input', {type: 'checkbox', checked});
+  c.setAttribute('aria-label', label);
+  c.addEventListener('change', () => onchange(c.checked));
+  return c;
+}
+function button(text, onclick, className = 'pill small') { return el('button', {className, textContent: text, onclick}); }
 
 // ---- interactions ----
-const rows = {};
+let open;
+try { open = new Set(JSON.parse(localStorage.getItem('nch-open')) || ['combat']); } catch (e) { open = new Set(['combat']); }
+function remember() { try { localStorage.setItem('nch-open', JSON.stringify([...open])); } catch (e) {} }
+
 function buildInteractions() {
-  const root = $('p-interactions'); root.replaceChildren();
   for (const cat of catalog.categories) {
     const items = catalog.interactions.filter(i => i.category === cat.id);
-    const box = el('div', 'cat');
-    const head = el('div', 'cathead');
-    const n = el('span', 'n');
-    const btns = el('div', 'catbtns');
-    const all = el('button', 'btn small ghost', 'All on'), none = el('button', 'btn small ghost', 'All off');
-    const setAll = on => { const change = {}; items.forEach(i => change[i.id] = {on}); api('settings', {interactions: change}).then(() => toast('Saved')); };
-    all.onclick = () => setAll(true); none.onclick = () => setAll(false);
-    btns.append(all, none);
-    head.append(el('span', 'name', esc(cat.label)), n, el('span', 'line'), btns);
-    const list = el('div', 'rows clip');
+    const box = el('div', {className: 'cat' + (open.has(cat.id) ? ' open' : '')});
+    const count = el('span', {className: 'meta'}), sign = el('span', {className: 'sign'});
+    const tog = el('button', {className: 'tog'}, el('span', {className: 'sub', textContent: cat.label}));
+    const setOpen = on => {
+      box.classList.toggle('open', on);
+      on ? open.add(cat.id) : open.delete(cat.id);
+      tog.setAttribute('aria-expanded', on); sign.textContent = on ? '−' : '+';
+    };
+    tog.onclick = () => { setOpen(!box.classList.contains('open')); remember(); update(); };
+    setOpen(open.has(cat.id));
+    const setAll = on => api('settings', {interactions: Object.fromEntries(items.map(i => [i.id, {on}]))}).catch(() => {});
+    const bulk = el('span', {className: 'bulk'}, button('All on', () => setAll(true), 'link'), button('All off', () => setAll(false), 'link'));
+    const list = el('div', {className: 'list'});
     for (const item of items) {
-      const r = rows[item.id] = {item, count: n, cat: items};
-      const row = r.row = el('div', 'row');
-      r.glow = el('div', 'glow');
-      r.sw = sw(false, on => save({interactions: {[item.id]: {on}}}, item.id + 'on'));
-      const info = el('div', 'info', `<div class="nm">${esc(item.label)}<span class="kind">${item.kind === 'level' ? 'WHILE ACTIVE' : 'ON EVENT'}</span></div><div class="ds">${esc(item.description)}</div>`);
-      const feel = r.feel = el('select', 'feel ctrl');
-      for (const f of catalog.feels[item.kind]) feel.append(new Option(f.label, f.id));
-      feel.onchange = () => save({interactions: {[item.id]: {feel: feel.value}}}, item.id + 'feel');
-      const st = el('div', 'strength ctrl');
-      r.out = el('output');
-      r.range = range(0, v => { r.out.textContent = pct(v); save({interactions: {[item.id]: {strength: v}}}, item.id + 'str', 250); }, item.id);
-      st.append(r.range, r.out);
-      r.try = el('button', 'btn small trybtn', 'Try');
-      r.try.title = 'Play this on your device now';
-      r.try.onclick = () => api('try', {id: item.id});
-      row.append(r.glow, r.sw, info, feel, st, r.try);
-      list.append(row);
+      const r = rows[item.id] = {item, box, count};
+      r.on = checkbox(false, item.label + ' on', on => save({interactions: {[item.id]: {on}}}, item.id + 'on'));
+      r.feel = el('select');
+      r.feel.setAttribute('aria-label', item.label + ' feel');
+      for (const f of catalog.feels[item.kind]) r.feel.append(new Option(f.label, f.id));
+      r.feel.onchange = () => save({interactions: {[item.id]: {feel: r.feel.value}}}, item.id + 'feel');
+      r.num = el('span', {className: 'num'});
+      r.range = slider(0, item.id, item.label + ' strength', v => { r.num.textContent = pct(v); save({interactions: {[item.id]: {strength: v}}}, item.id + 'str', 250); });
+      r.try = button('Try', () => api('try', {id: item.id}), 'pill small try');
+      r.try.title = 'Play it on your device now';
+      r.row = el('div', {className: 'row'}, r.on,
+        el('div', {}, el('div', {className: 'name', textContent: item.label, title: item.description}), el('div', {className: 'ctl'}, r.feel, r.range)),
+        r.num, r.try);
+      list.append(r.row);
     }
-    box.append(head, list); root.append(box);
+    // the bulk switches sit beside the toggle, not inside it: buttons can't nest
+    box.append(el('div', {className: 'head'}, tog, bulk, count, sign), list);
+    count.onclick = sign.onclick = () => tog.click();
+    $('cats').append(box);
   }
 }
 function updateInteractions() {
-  let on = 0;
-  const counts = new Map();
+  const perCat = new Map();
+  let total = 0;
   for (const [id, r] of Object.entries(rows)) {
     const s = S.settings.interactions[id];
-    if (s.on) on++;
-    counts.set(r.count, (counts.get(r.count) || 0) + (s.on ? 1 : 0));
+    const c = perCat.get(r.count) || [0, 0];
+    perCat.set(r.count, [c[0] + s.on, c[1] + 1]);
+    total += s.on;
+    if (!r.box.classList.contains('open')) continue;
     r.row.classList.toggle('off', !s.on);
-    r.sw.firstChild.checked = s.on;
+    r.on.checked = s.on;
     if (document.activeElement !== r.feel) r.feel.value = s.feel;
-    if (!editing.has(id)) { r.range.value = Math.round(s.strength * 100); fill(r.range); r.out.textContent = pct(s.strength); }
-    const c = (S.contributions[id] || 0) + (S.contributions['try:' + id] || 0);
-    r.glow.style.opacity = Math.min(1, c / Math.max(.05, S.settings.max_strength) * 1.4);
+    setSlider(r.range, s.strength, id);
+    if (!editing.has(id)) r.num.textContent = pct(s.strength);
+    r.row.classList.toggle('live', (S.contributions[id] || 0) + (S.contributions['try:' + id] || 0) > .01);
     r.try.disabled = !S.settings.enabled;
   }
-  for (const [n, c] of counts) n.textContent = c + ' / ' + [...Object.values(rows)].filter(r => r.count === n).length + ' on';
-  $('icount').textContent = on + '/' + catalog.interactions.length;
+  for (const [count, [on, all]] of perCat) count.textContent = on + ' / ' + all;
+  $('icount').textContent = total + ' of ' + catalog.interactions.length + ' on';
 }
 
 // ---- devices ----
-let deviceKeys = '';
+let deviceKeys = null;
+function motorSummary(motors) {
+  const n = {};
+  motors.forEach(m => n[m] = (n[m] || 0) + 1);
+  return Object.entries(n).map(([m, k]) => (k > 1 ? k + ' × ' : '') + m.toLowerCase()).join(', ');
+}
 function updateDevices() {
-  const list = $('devlist');
   const keys = S.devices.map(d => d.key + d.motors.join()).join('|');
   if (keys !== deviceKeys) {
-    deviceKeys = keys; list.replaceChildren();
-    if (!S.devices.length) {
-      const e = el('div', 'empty clip');
-      e.innerHTML = '<div class="h">No device connected</div>Turn your device on and put it in pairing mode, then press <b>Scan for devices</b>.<br>Bluetooth needs to be on. Anything Intiface supports works — see <code>iostindex.com</code> for the list.';
-      list.append(e);
-    }
+    deviceKeys = keys;
+    const list = $('devlist');
+    list.replaceChildren();
+    if (!S.devices.length) list.append(el('div', {className: 'empty'},
+      el('p', {className: 'name', textContent: 'No device yet'}),
+      el('p', {className: 'meta', textContent: 'Close the device’s phone app, switch the device to pairing mode, then press Scan. Any device Intiface supports works; iostindex.com lists them.'})));
     for (const d of S.devices) {
-      const card = el('div', 'dev clip');
       const set = d.settings;
-      const info = el('div', '', `<div class="nm">${esc(d.name)}</div>`);
-      const motors = el('div', 'motors'); d.motors.forEach(m => motors.append(el('span', '', esc(m)))); info.append(motors);
-      if (d.extra_motors) {
-        const x = el('label', 'extra'); x.append(sw(set.all_motors, v => save({devices: {[d.key]: {all_motors: v}}}, d.key + 'm')), document.createTextNode('Also drive the non-vibration motors'));
-        info.append(x);
-      }
-      const st = el('div', 'strength'); const out = el('output'); out.textContent = pct(set.strength);
-      st.append(range(set.strength, v => { out.textContent = pct(v); save({devices: {[d.key]: {strength: v}}}, d.key + 's', 250); }, 'dev' + d.key), out);
-      const test = el('button', 'btn small', 'Test'); test.onclick = () => api('test-device', {key: d.key});
-      card.append(sw(set.on, v => save({devices: {[d.key]: {on: v}}}, d.key + 'on')), info, st, test);
-      list.append(card);
+      const num = el('span', {className: 'num', textContent: pct(set.strength)});
+      const opts = el('div', {className: 'opts'},
+        el('label', {className: 'check'}, checkbox(set.on, 'Use ' + d.name, v => save({devices: {[d.key]: {on: v}}}, d.key + 'on')), 'Use this device'));
+      if (d.extra_motors) opts.append(el('label', {className: 'check'}, checkbox(set.all_motors, 'Drive every motor', v => save({devices: {[d.key]: {all_motors: v}}}, d.key + 'm')), 'All motors'));
+      list.append(el('div', {className: 'dev'},
+        el('div', {className: 'id'}, el('span', {className: 'name', textContent: d.name}), el('span', {className: 'meta', textContent: motorSummary(d.motors)})),
+        el('div', {className: 'level'}, el('span', {textContent: 'Strength'}),
+          slider(set.strength, 'dev' + d.key, d.name + ' strength', v => { num.textContent = pct(v); save({devices: {[d.key]: {strength: v}}}, d.key + 's', 250); }), num),
+        el('div', {className: 'foot'}, opts, button('Test', () => api('test-device', {key: d.key})))));
     }
   }
-  $('dcount').textContent = S.devices.length || '';
   $('scan').disabled = S.link !== 'connected' || S.scanning;
-  $('scanstate').innerHTML = S.scanning ? '<span class="pulse">Scanning… put your device in pairing mode</span>' : (S.link !== 'connected' ? 'Waiting for Intiface' : '');
+  $('scanstate').textContent = S.scanning ? 'Scanning… put your device in pairing mode.' : '';
 }
 
-// ---- status ----
-function tile(id, cls, value, detail, action) {
-  $('t-' + id).className = 'tile clip ' + cls;
-  $(id + '-v').textContent = value; $(id + '-d').textContent = detail;
-  if (action !== undefined) { const a = $(id + '-a'); if (a.dataset.k !== (action ? action.k : '')) { a.dataset.k = action ? action.k : ''; a.replaceChildren(); if (action) a.append(action.node()); } }
+// ---- status + output ----
+function status(id, state, value, detail, action) {
+  const box = $('st-' + id);
+  box.className = state;
+  box.querySelector('.v').textContent = value;
+  box.querySelector('.d').textContent = detail || '';
+  const a = box.querySelector('.a'), k = action ? action[0] : '';
+  if (a.dataset.k !== k) { a.dataset.k = k; a.replaceChildren(...(action ? [button(action[0], action[1])] : [])); }
 }
-function button(label, fn, primary) { return () => { const b = el('button', 'btn small' + (primary ? ' primary' : ''), label); b.onclick = fn; return b; }; }
 function updateStatus() {
-  const L = {connected: ['ok', 'Connected'], starting: ['warn', 'Starting'], connecting: ['warn', 'Connecting'], missing: ['bad', 'Not installed'], error: ['bad', 'Not found']}[S.link] || ['warn', S.link];
-  let act = null;
-  if (S.link === 'missing') act = {k: 'dl', node: button('Download Intiface Engine', () => api('download-engine'), true)};
-  else if (S.link === 'error') act = {k: 'retry', node: button('Retry', () => api('reconnect'))};
-  tile('link', L[0], L[1], S.engine_download || S.link_detail, act);
-  if (S.devices.length) tile('dev', 'ok', S.devices.map(d => d.name).join(', '), S.devices.length > 1 ? S.devices.length + ' devices' : 'Ready', null);
-  else if (S.scanning) tile('dev', 'warn', 'Scanning…', 'Put your device in pairing mode', null);
-  else tile('dev', S.link === 'connected' ? 'bad' : '', 'None', S.link === 'connected' ? 'Turn it on, then scan' : 'Waiting for Intiface',
-    S.link === 'connected' ? {k: 'scan', node: button('Scan', () => api('scan'), true)} : null);
-  const G = {live: ['ok', 'Live'], idle: ['warn', 'Connected'], paused: ['warn', 'Paused'], offline: ['', 'Not running'], waiting: ['', 'Waiting']}[S.game] || ['', S.game];
-  tile('game', G[0], G[1], S.game_detail);
+  const link = {connected: ['', 'Connected'], starting: ['wait', 'Starting'], connecting: ['wait', 'Connecting'], missing: ['bad', 'Not installed'], error: ['bad', 'Not found']}[S.link] || ['wait', S.link];
+  const linkAction = S.link === 'missing' ? ['Download', () => api('download-engine')] : S.link === 'error' ? ['Retry', () => api('reconnect')] : null;
+  status('link', link[0], link[1], S.engine_download || S.link_detail, linkAction);
+  if (S.devices.length) status('dev', '', S.devices.map(d => d.name).join(', '), S.devices.length > 1 ? S.devices.length + ' devices' : '');
+  else if (S.scanning) status('dev', 'wait', 'Scanning', 'Pairing mode on?');
+  else if (S.link === 'connected') status('dev', 'bad', 'None', 'Turn it on, then scan', ['Scan', () => api('scan')]);
+  else status('dev', '', 'None', 'Waiting for Intiface');
+  const game = {live: ['', 'Live'], idle: ['', 'Connected'], paused: ['wait', 'Paused'], offline: ['', 'Not running'], waiting: ['', 'Waiting']}[S.game] || ['', S.game];
+  status('game', game[0], game[1], S.game === 'live' ? '' : S.game_detail);
+
   const on = S.settings.enabled;
-  $('power').classList.toggle('on', on); $('powerlabel').classList.toggle('on', on);
-  $('powerlabel').textContent = on ? 'Feedback on' : 'Feedback off';
+  $('power').textContent = on ? 'On' : 'Off';
+  $('power').className = 'pill' + (on ? ' on' : '');
+  $('power').setAttribute('aria-pressed', on);
   $('out').textContent = pct(S.output);
-  if (!editing.has('master')) { $('master').value = Math.round(S.settings.max_strength * 100); fill($('master')); $('masterv').textContent = pct(S.settings.max_strength); }
-  const why = Object.entries(S.contributions).sort((a, b) => b[1] - a[1]).slice(0, 4);
-  $('why').replaceChildren(...why.map(([id]) => { const key = id.replace(/^try:/, ''); const item = rows[key]; return el('span', 'chip', esc(item ? item.item.label : (key === 'test' ? 'Test buzz' : key))); }));
-  if (!why.length) $('why').append(document.createTextNode(on ? (S.game === 'live' ? 'Quiet — play and it reacts' : 'Press Try on any interaction to feel it') : 'Feedback is off'));
+  setSlider($('master'), S.settings.max_strength, 'master');
+  if (!editing.has('master')) $('masterv').textContent = pct(S.settings.max_strength);
+  const names = Object.entries(S.contributions).sort((a, b) => b[1] - a[1]).slice(0, 3).map(([id]) => {
+    const key = id.replace(/^try:/, '');
+    return rows[key] ? rows[key].item.label : key === 'test' ? 'Test buzz' : key;
+  });
+  $('why').textContent = names.length ? [...new Set(names)].join(', ')
+    : !on ? 'Feedback is off' : S.game === 'live' ? 'Nothing playing' : 'Press Try to feel an interaction';
   if (document.activeElement !== $('address')) $('address').value = S.settings.intiface_address;
   $('autostart').checked = S.settings.start_intiface;
-  $('enginepath').textContent = S.engine_path ? 'Engine: ' + S.engine_path : 'Intiface Engine is not installed. Download it, or start Intiface Central yourself.';
-  $('download').style.display = S.engine_path ? 'none' : '';
+  $('enginepath').textContent = S.engine_path ? 'Intiface Engine installed.' : 'Intiface Engine is not installed. Download it, or run Intiface Central yourself.';
+  $('enginepath').title = S.engine_path || '';
+  $('download').hidden = !!S.engine_path;
   $('ver').textContent = 'v' + S.version;
 }
-function drawSpark() {
-  const c = $('spark'), g = c.getContext('2d'), w = c.width = c.clientWidth * devicePixelRatio, h = c.height = c.clientHeight * devicePixelRatio;
+function drawBars() {
+  const c = $('bars'), g = c.getContext('2d'), dpr = devicePixelRatio || 1;
+  const w = c.width = c.clientWidth * dpr, h = c.height = c.clientHeight * dpr;
   g.clearRect(0, 0, w, h);
-  g.strokeStyle = 'rgba(255,255,255,.06)'; g.lineWidth = 1;
-  for (const y of [.25, .5, .75]) { g.beginPath(); g.moveTo(0, h * y); g.lineTo(w, h * y); g.stroke(); }
-  const cap = S.settings.max_strength;
-  g.setLineDash([4 * devicePixelRatio, 4 * devicePixelRatio]); g.strokeStyle = 'rgba(243,230,0,.45)';
-  g.beginPath(); g.moveTo(0, h - cap * (h - 4) - 2); g.lineTo(w, h - cap * (h - 4) - 2); g.stroke(); g.setLineDash([]);
-  const pts = S.history, n = 150;
-  if (!pts.length) return;
-  const x = i => (i + n - pts.length) / (n - 1) * w, y = v => h - v * (h - 4) - 2;
-  const grad = g.createLinearGradient(0, 0, 0, h); grad.addColorStop(0, 'rgba(79,240,255,.35)'); grad.addColorStop(1, 'rgba(79,240,255,0)');
-  g.beginPath(); g.moveTo(x(0), h); pts.forEach((v, i) => g.lineTo(x(i), y(v))); g.lineTo(x(pts.length - 1), h); g.fillStyle = grad; g.fill();
-  g.beginPath(); pts.forEach((v, i) => i ? g.lineTo(x(i), y(v)) : g.moveTo(x(i), y(v)));
-  g.strokeStyle = '#4ff0ff'; g.lineWidth = 2 * devicePixelRatio; g.shadowColor = '#4ff0ff'; g.shadowBlur = 8; g.stroke(); g.shadowBlur = 0;
+  const css = getComputedStyle(document.documentElement), ink = css.getPropertyValue('--ink'), red = css.getPropertyValue('--red');
+  const n = 50, per = 3, hist = S.history, gap = 3 * dpr, bw = (w - gap * (n - 1)) / n;
+  for (let i = 0; i < n; i++) {
+    const end = hist.length - (n - 1 - i) * per, slice = hist.slice(Math.max(0, end - per), Math.max(0, end));
+    const v = slice.length ? Math.max(...slice) : 0;
+    g.fillStyle = i === n - 1 ? red : ink;
+    if (v > .005) g.fillRect(i * (bw + gap), h - v * h, bw, v * h);
+  }
+  g.fillStyle = ink; g.fillRect(0, h - dpr, w, dpr);
+  g.fillStyle = red; g.fillRect(0, Math.max(0, h - S.settings.max_strength * h - dpr / 2), w, dpr);
 }
 
 async function poll() {
@@ -441,26 +426,28 @@ async function poll() {
     S = await res.json();
     if (!catalog) { catalog = S.catalog; buildInteractions(); }
     failures = 0; $('offline').classList.remove('show');
-    updateStatus(); updateInteractions(); updateDevices(); drawSpark();
+    update();
   } catch (e) {
     if (++failures > 8) $('offline').classList.add('show');
   }
   setTimeout(poll, document.hidden ? 1000 : 100);
 }
+function update() { if (S) { updateStatus(); updateInteractions(); updateDevices(); drawBars(); } }
 
 // ---- wiring ----
-function openTab(name) {
-  const tab = document.querySelector(`.tab[data-tab="${name}"]`) || document.querySelector('.tab');
-  document.querySelectorAll('.tab').forEach(x => x.classList.toggle('active', x === tab));
-  document.querySelectorAll('.panel').forEach(p => p.classList.toggle('active', p.id === 'p-' + tab.dataset.tab));
+function showSettings(on) {
+  $('setbody').hidden = !on;
+  $('settoggle').setAttribute('aria-expanded', on);
+  $('setsign').textContent = on ? '−' : '+';
+  try { localStorage.setItem('nch-settings', on ? '1' : ''); } catch (e) {}
 }
-document.querySelectorAll('.tab').forEach(t => t.onclick = () => { history.replaceState(null, '', '#' + t.dataset.tab); openTab(t.dataset.tab); });
-openTab(location.hash.slice(1));
-$('power').onclick = () => api('settings', {enabled: !S.settings.enabled}).then(() => toast(S.settings.enabled ? 'Feedback off' : 'Feedback on'));
-const m = $('master');
-m.addEventListener('pointerdown', () => editing.add('master'));
-m.addEventListener('pointerup', () => setTimeout(() => editing.delete('master'), 600));
-m.addEventListener('input', () => { fill(m); $('masterv').textContent = m.value + '%'; save({max_strength: m.value / 100}, 'master', 200); });
+$('settoggle').onclick = () => showSettings($('setbody').hidden);
+let settingsOpen = location.hash === '#settings';
+try { settingsOpen = settingsOpen || localStorage.getItem('nch-settings') === '1'; } catch (e) {}
+showSettings(settingsOpen);
+
+$('power').onclick = () => api('settings', {enabled: !S.settings.enabled}).catch(() => {});
+track($('master'), 'master', v => { $('masterv').textContent = pct(v); save({max_strength: v}, 'master', 200); });
 $('scan').onclick = () => api('scan');
 $('reconnect').onclick = () => api('reconnect').then(() => toast('Reconnecting'));
 $('download').onclick = () => api('download-engine');

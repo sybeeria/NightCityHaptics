@@ -1,4 +1,4 @@
--- Night City Haptics 0.2.0 (CET part)
+-- Night City Haptics 0.2.1 (CET part)
 -- Reports what happens in the game to the Night City Haptics companion app by
 -- writing state.json in this folder about 30 times a second. The companion owns
 -- every setting, pattern and device; this file never talks to hardware.
@@ -12,7 +12,7 @@
 --   vehicleComponent.script:2445/3100/3152: explosions and collisions;
 -- itemsQueue/currencyNotification/levelupNotification/journalNotification queues;
 -- items/actions/useHealCharge.script:4. Romance facts: HISTORY.md § scene-sources.
-local mod = {version = "0.2.0"}
+local mod = {version = "0.2.1"}
 local R = {
   session = "", seq = 0, clock = 0, sampleClock = 0, writeClock = 0, overlay = false,
   loading = false, paused = false, shutdown = false, active = false, reason = "starting",
@@ -353,27 +353,44 @@ registerForEvent("onOverlayOpen", function() R.overlay = true; R.active = false;
 registerForEvent("onOverlayClose", function() R.overlay = false end)
 registerForEvent("onShutdown", function() R.shutdown, R.active = true, false; writeState() end)
 
+-- Overlay colours match the companion page: paper, ink and one red.
+local INK, PAPER, RED = {.07, .07, .07, 1}, {.97, .97, .96, .98}, {.84, .06, .06, 1}
+local STYLE = {
+  {"WindowBg", PAPER}, {"TitleBg", {.9, .9, .89, 1}}, {"TitleBgActive", {.9, .9, .89, 1}},
+  {"TitleBgCollapsed", {.9, .9, .89, 1}}, {"Text", INK}, {"TextDisabled", {.42, .42, .42, 1}},
+  {"Border", INK}, {"Button", {.86, .86, .85, 1}}, {"ButtonHovered", {.95, .7, .7, 1}},
+  {"ButtonActive", {.95, .55, .55, 1}}, {"FrameBg", {.86, .86, .85, 1}}, {"PlotHistogram", RED},
+}
+
 registerForEvent("onDraw", function()
   if not R.overlay then return end
+  for _, entry in ipairs(STYLE) do
+    local c = entry[2]
+    ImGui.PushStyleColor(ImGuiCol[entry[1]], c[1], c[2], c[3], c[4])
+  end
+  ImGui.PushStyleVar(ImGuiStyleVar.WindowRounding, 0)
+  ImGui.PushStyleVar(ImGuiStyleVar.FrameRounding, 10)
   ImGui.SetNextWindowSize(300, 0, ImGuiCond.FirstUseEver)
   if ImGui.Begin("Night City Haptics", ImGuiWindowFlags.AlwaysAutoResize) then
-    if companionUp() then
+    local up = companionUp()
+    if up then
       local devices = R.companion.devices or {}
-      ImGui.TextColored(.35, .95, .65, 1, "Companion running")
-      ImGui.Text(#devices > 0 and table.concat(devices, ", ") or "No device connected yet")
-      if R.companion.enabled == false then ImGui.TextColored(1, .8, .2, 1, "Feedback is switched off in the app") end
+      ImGui.Text("Running · " .. (#devices > 0 and table.concat(devices, ", ") or "no device yet"))
+      if R.companion.enabled == false then ImGui.TextColored(RED[1], RED[2], RED[3], 1, "Feedback is off in the app") end
     else
-      ImGui.TextColored(1, .4, .4, 1, "Companion not running")
-      ImGui.TextWrapped("Start the Night City Haptics app (start.sh / start.cmd in this mod's companion folder).")
+      ImGui.TextColored(RED[1], RED[2], RED[3], 1, "App not running")
+      ImGui.TextWrapped("Start it with start.sh or start.cmd in this mod's companion folder.")
     end
-    ImGui.ProgressBar(companionUp() and tonumber(R.companion.output) or 0, 280, 0, "output")
-    if ImGui.Button(R.paused and "Resume haptics" or "Pause haptics", 136, 0) then togglePause() end
+    local output = up and tonumber(R.companion.output) or 0
+    ImGui.ProgressBar(output, 280, 0, string.format("%d%%", math.floor(output * 100 + .5)))
+    if ImGui.Button(R.paused and "Resume" or "Pause", 136, 0) then togglePause() end
     ImGui.SameLine()
     if ImGui.Button("Test buzz", 136, 0) then testBuzz() end
-    if R.paused then ImGui.TextColored(1, .8, .2, 1, "Paused until you resume") end
-    ImGui.TextDisabled("Settings live in the companion app.")
+    if R.paused then ImGui.TextColored(RED[1], RED[2], RED[3], 1, "Paused") end
   end
   ImGui.End()
+  ImGui.PopStyleVar(2)
+  ImGui.PopStyleColor(#STYLE)
 end)
 
 registerHotkey("nchPause", "Pause / resume haptics", togglePause)

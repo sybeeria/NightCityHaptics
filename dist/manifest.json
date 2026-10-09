@@ -1,16 +1,18 @@
 {
-  "version": "0.2.0",
+  "version": "0.2.1",
   "files": {
-    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/init.lua": "7ce309a1bef62168c88c3a1830ba92a39a153609bd7393990669eb8ca6942cb7",
+    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/init.lua": "90b4eafc07cbc3de11757b211766f9c68d6428d2df32a52f1abbda65adae2e41",
     "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/buttplug.py": "6ee574150e3cde7f58752ff03dbafbad6fae0ff9e8cc34afe3af0568211adf9e",
     "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/catalog.json": "4c974a5f38f4148da68ec9034b2f87e1d1589be5b47b4b72359e378c13a1589e",
+    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/fonts/OFL.txt": "108b4e57c9c796d3d38d0428ca7ee39de47ad93187302718d9b2d8864b9b716b",
+    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/fonts/archivo.woff2": "8f704806dbedeaaeca334b11ec348bc3ac3a439d6431544b3afb54f534ee4967",
     "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/haptics.py": "16965b5d8c20ca3761799fda5f35ec022d877d53580348aafe0e50bf66b4d893",
-    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/nch.py": "e0cc7d902445983557367b0175c6d879fe42632459b722c1ea5ad6bec9e4df75",
+    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/nch.py": "3621a4a0a5561282d81e9c6e0adf11d82b1cfd864aa8be27c90ee46541526115",
     "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/start.cmd": "04a37b23be52fcb25394adf6a417218a2081571cb356f4607aad2100375acd5c",
     "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/start.sh": "8fab573ff2a2867d1a93e229ceb5d250b6325176ed9312f3c6c91904e07877ac",
-    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/ui.html": "04e254efcb3ea15100224ebf1cfffc33c77eb54c4978a4930eea8ef5fcd0c55c"
+    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/ui.html": "d25ddfe1786409171c22b82b040751cba68ac11b955dd2ae8a7295f35fd1b072"
   },
-  "zip": "NightCityHaptics-0.2.0.zip",
-  "zip_sha256": "13f51638a6317e2278aa817afafd88efec6c160abe0a37afaffdef04f940cc03",
+  "zip": "NightCityHaptics-0.2.1.zip",
+  "zip_sha256": "d15e9de3832240a40be665270072022d3357ad7ae7dcb357b47b4b660eee8451",
   "privacy_check": "No local paths/account IDs/debug artifacts in either encoding"
 }

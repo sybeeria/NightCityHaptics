@@ -398,6 +398,9 @@ class AppTests(unittest.TestCase):
             self.assertEqual(status, 200)
             self.assertIn(b"Night City", page)
             self.assertEqual(call("GET", "/", headers={"Host": "evil.example:80"})[0], 403)
+            status, font = call("GET", "/fonts/archivo.woff2")
+            self.assertEqual((status, font[:4]), (200, b"wOF2"), "the page's font is served locally")
+            self.assertNotIn(b"https://", page, "the page loads nothing from the internet")
             self.assertEqual(call("POST", "/api/settings", {"max_strength": .2})[0], 403, "needs X-NCH")
             self.assertEqual(call("POST", "/api/settings", {"max_strength": .2, "interactions": {"loot": {"on": True}}},
                                   {"X-NCH": "1"})[0], 200)

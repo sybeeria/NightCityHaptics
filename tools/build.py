@@ -7,7 +7,7 @@ import shutil
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 MOD = Path("bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics")
 
 
@@ -22,7 +22,7 @@ def main():
         if not source_dir.exists():
             raise RuntimeError(f"Missing payload: {source_dir}")
         for source in sorted(source_dir.rglob("*")):
-            if not source.is_file() or source.suffix not in (".lua", ".json", ".py", ".txt", ".sh", ".cmd", ".html"):
+            if not source.is_file() or source.suffix not in (".lua", ".json", ".py", ".txt", ".sh", ".cmd", ".html", ".woff2"):
                 continue
             if "__pycache__" in source.parts or source.name in ("state.json", "status.json", "settings.json"):
                 continue

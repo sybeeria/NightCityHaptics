@@ -34,7 +34,7 @@ sys.path.insert(0, str(HERE))
 import buttplug  # noqa: E402
 import haptics  # noqa: E402
 
-VERSION = "0.2.0"
+VERSION = "0.2.1"
 PORT = 19870
 TICK = 1 / 30
 ENGINE_RELEASE = "5.0.4"
@@ -409,6 +409,8 @@ def make_server(app, port):
                 state = app.snapshot()
                 state["catalog"] = app.catalog if self.headers.get("X-NCH-Catalog") else None
                 return self.reply(200, state)
+            if self.path == "/fonts/archivo.woff2":
+                return self.reply(200, (HERE / "fonts/archivo.woff2").read_bytes(), "font/woff2")
             if self.path == "/api/ping":
                 return self.reply(200, {"app": "night-city-haptics", "version": VERSION})
             self.reply(404, {"error": "Not found"})

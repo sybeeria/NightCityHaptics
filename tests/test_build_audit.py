@@ -27,6 +27,10 @@ class BuildTests(unittest.TestCase):
             path = self.root / ("src/cet/nightCityHaptics" if rel == "init.lua" else "src") / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text("payload " + rel)
+        for rel, source_rel in builder.ROOT_FILES.items():
+            path = self.root / source_rel
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("payload " + rel)
         self.patch = mock.patch.object(builder, "ROOT", self.root)
         self.patch.start(); self.addCleanup(self.patch.stop)
         self.dist = self.root / "dist"
@@ -67,7 +71,7 @@ class BuildTests(unittest.TestCase):
         (self.companion.parent / "state.json").write_text('{}')
         self.build()
         manifest = json.loads((self.dist / "manifest.json").read_text())
-        self.assertEqual(len(manifest["files"]), len(builder.REQUIRED))
+        self.assertEqual(len(manifest["files"]), len(builder.REQUIRED) + len(builder.ROOT_FILES))
         before = (self.dist / "manifest.json").read_bytes()
         self.companion.write_text("# private /home/someone/account")
         with self.assertRaisesRegex(RuntimeError, "Private path"):

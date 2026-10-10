@@ -15,6 +15,7 @@ MOD = Path("bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics")
 REQUIRED = {"init.lua", "companion/night-city-haptics", "companion/night-city-haptics.exe",
             "companion/catalog.json", "companion/ui.html", "companion/start.sh", "companion/start.cmd",
             "companion/fonts/archivo.woff2", "companion/fonts/OFL.txt"}
+ROOT_FILES = {"nch-steam-launch": "tools/nch-steam-launch"}   # game-root files: package path -> source
 
 
 def main(argv=None):
@@ -51,7 +52,13 @@ def main(argv=None):
                 destination.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(source, destination)
                 files[rel.as_posix()] = hashlib.sha256(destination.read_bytes()).hexdigest()
-        required = {(MOD / rel).as_posix() for rel in REQUIRED}
+        for rel, source_rel in ROOT_FILES.items():
+            source = ROOT / source_rel
+            if not source.is_file() or source.is_symlink():
+                raise RuntimeError(f"Missing or symlinked payload: {source_rel}")
+            shutil.copy2(source, staging / rel)
+            files[rel] = hashlib.sha256((staging / rel).read_bytes()).hexdigest()
+        required = {(MOD / rel).as_posix() for rel in REQUIRED} | ROOT_FILES.keys()
         if not required <= files.keys():
             raise RuntimeError("Payload is missing required files: " + ", ".join(sorted(required - files.keys())))
         leaked = []
@@ -68,7 +75,7 @@ def main(argv=None):
                 info = zipfile.ZipInfo(rel, (2026, 10, 9, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.create_system = 3
-                info.external_attr = (0o100755 if rel.endswith((".sh", "/night-city-haptics")) else 0o100644) << 16
+                info.external_attr = (0o100755 if rel.endswith((".sh", "/night-city-haptics")) or rel in ROOT_FILES else 0o100644) << 16
                 archive.writestr(info, (staging / rel).read_bytes())
         with zipfile.ZipFile(candidate) as archive:
             if archive.testzip() is not None or set(archive.namelist()) != set(files):

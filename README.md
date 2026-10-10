@@ -1,72 +1,69 @@
 # Night City Haptics
 
-Cyberpunk 2077 haptics for any [Intiface](https://intiface.com)-compatible device (18+). Gunfire
-kicks, hits thud, low health beats like a heart and engines rev. There are 47 interactions,
-including romance and joytoy scene tracks. Each one has its own switch, feel and strength, which
-you tune live on a local control page.
+Cyberpunk 2077 for any [Intiface](https://intiface.com)-compatible toy (18+). Gunfire kicks, hits
+thud, low health beats like a heart, engines rev, and romance and joytoy scenes get their own
+tracks. 47 interactions, each tuned live on a local control page.
 
 ![Control page](docs/screenshot.png)
 
 ## You need
 
-- Cyberpunk 2077 on PC (Windows, or Linux / SteamOS through Proton) with
+- Cyberpunk 2077 on Windows or Linux / SteamOS, with
   [Cyber Engine Tweaks](https://www.nexusmods.com/cyberpunk2077/mods/107).
-- The native companion for 64-bit Windows or x86-64 Linux / SteamOS.
-- A device with **Buttplug.io Support** in the [compatible-device index](https://iostindex.com/).
+- A toy with **Buttplug.io Support** in the [IoST Index](https://iostindex.com/).
 
-You don't need to install Intiface. The app downloads the official Intiface Engine once,
-checks its checksum and starts it. If Intiface Central is already running on port 12345, the
-app uses that instead.
+Intiface itself is optional: the app downloads the official Intiface Engine for you. If Intiface
+Central is already running, it uses that.
 
-## Setup
+## Install
 
-1. Download the current candidate [`NightCityHaptics-0.4.1.zip`](dist/NightCityHaptics-0.4.1.zip)
-   and extract it into the game folder (the one that contains `bin`). A GitHub release has
-   not been published yet.
-2. In `bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/`, run **`start.cmd`**
-   (Windows) or **`start.sh`** (Linux). These launch `night-city-haptics.exe` or
-   `night-city-haptics`; the control page opens in your browser.
-3. On first run, click **Download engine** in Settings. Then put your device in pairing mode.
-4. Play. Feedback runs only during live gameplay, not in menus, loading screens, photo mode or
-   the CET overlay.
+1. Extract [`NightCityHaptics-0.4.1.zip`](dist/NightCityHaptics-0.4.1.zip) into the game folder
+   (the one with `bin` in it).
+2. Open `bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/` and run
+   **`start.sh`** (Linux) or **`start.cmd`** (Windows). The control page opens in your browser.
+3. Click **Download** next to Intiface at the top of the page. The engine starts and scans for
+   30 seconds, so turn your toy on. It shows up under Devices.
+4. **Linux / SteamOS:** in Steam, open Cyberpunk 2077 → Properties → Launch Options and enter:
 
-**Optional, Steam on Linux/SteamOS:** to start the app with the game, save
-[nch-steam-launch](https://raw.githubusercontent.com/sybeeria/NightCityHaptics/main/tools/nch-steam-launch)
-in the game folder and set the game's Launch Options to:
+   ```sh
+   /bin/sh "/home/deck/.local/share/Steam/steamapps/common/Cyberpunk 2077/nch-steam-launch" -- %command%
+   ```
 
-```sh
-/bin/sh "/path/to/Cyberpunk 2077/nch-steam-launch" -- %command%
-```
+   Change the path if your game is elsewhere (Steam → Manage → Browse local files). From now
+   on the app starts with the game and closes with it. Already have launch options? `VAR=value`
+   settings go first, other wrappers after `--`, game flags after `%command%`.
 
-Put existing environment overrides first, other wrappers after `--`, and game flags after
-`%command%`. The app closes when the game does.
+   **Windows:** run `start.cmd` before you play.
+
+The page stays at http://127.0.0.1:19870/ while the app runs. Feedback plays only in live
+gameplay, not in menus, loading screens, photo mode or the CET overlay.
 
 ## Using it
 
-- **Interactions:** set a switch, feel and strength for each interaction, or switch a whole
-  group. The shape next to each feel shows how it plays. **Try** previews it without the game.
-- **Max strength** caps the whole mix (default 70%). **On/Off** stops all of it. **Pause** in the
-  CET overlay suspends game feedback; Pause and Test buzz can be bound in CET's Bindings.
-- **Devices:** each device has a switch, strength, battery level and one button per output it
-  has. **Test** sends a short pulse at half that device's strength.
+- **Interactions:** each has a switch, a feel, a strength and **Try**, which previews it
+  without the game. Whole groups switch on and off together.
+- **Max strength** caps everything (default 70%). **On/Off** stops it all. **Pause** is in the
+  CET overlay; Pause and Test buzz can be bound in CET's Bindings.
+- **Devices:** strength, battery and a button per output. **Test** sends a short pulse.
+- **Settings:** Intiface address (default `ws://127.0.0.1:12345`), engine auto-start and
+  **Reset interactions** (keeps device settings).
+- **Quit** stops your toys and the engine the app started.
 
-| Output | What it does |
+| Output | Behaviour |
 |---|---|
-| Vibrate | follows the mix |
+| Vibrate, Light | follow the mix |
 | Rotate | follows the mix; a sudden hit reverses the spin |
-| Thrust | thrusting and oscillating motors follow the mix |
-| Stroke | strokes faster and further as the mix rises |
-| Squeeze | suction and air pumps ease toward the mix (off by default) |
-| Heat | warms with sustained feedback, cools after (off by default) |
-| Light | follows the mix |
+| Thrust | follows the mix |
+| Stroke | faster and longer as the mix rises |
+| Squeeze | eases toward the mix (off by default) |
+| Heat | warms with sustained feedback (off by default) |
 
-A device with a vibrator starts with Vibrate and Light on. Other devices start with their motion
-outputs and Light on.
+## Scenes
 
-- **Settings** holds the Intiface address (default `ws://127.0.0.1:12345`), engine auto-start and
-  **Reset interactions**. The reset keeps your device and Intiface settings. Settings save
-  automatically.
-- **Quit** stops your devices and the engine the app started.
+- **Romance:** Judy, Kerry, Panam, River and Meredith Stout each have a track. Judy, Kerry and
+  Panam have shorter tracks for the censored cut.
+- **Joytoys:** Jig-Jig Street and Heywood, synced to each clip.
+- Tracks fade out when the scene ends. Loading a save after a romance doesn't replay it.
 
 <details>
 <summary>All 47 interactions and their defaults</summary>
@@ -125,68 +122,43 @@ Strength is a share of Max strength.
 
 </details>
 
-## Scenes
-
-- **Romance:** Judy, Kerry, Panam, River and Meredith Stout each have their own track. Judy, Kerry
-  and Panam switch to shorter tracks for the censored cut.
-- **Joytoys:** Jig-Jig Street and Heywood restart their track at each clip, using a pattern inspired by the game's
-  rumble rhythm.
-- Tracks fade out when a scene ends. Loading a save after a romance doesn't replay it.
-
 ## Troubleshooting
 
-- **Device not found:** close its phone app, then press **Scan**. On Linux, turn Bluetooth on.
-- **Companion missing:** check that `night-city-haptics.exe` (Windows) or `night-city-haptics`
-  (Linux) is next to the start script. Build both native companions before making the ZIP.
-- **Linux permission denied:** run `chmod +x start.sh night-city-haptics` in the companion folder.
-- **Logs:** `%LOCALAPPDATA%\NightCityHaptics\` (Windows) or `~/.local/share/night-city-haptics/`
+- **Toy not found:** close its phone app and press **Scan**. On Linux, turn Bluetooth on.
+- **Permission denied (Linux):** `chmod +x start.sh night-city-haptics` in the companion folder.
+- **Logs:** `%LOCALAPPDATA%\NightCityHaptics\` (Windows), `~/.local/share/night-city-haptics/`
   (Linux).
 
-## Privacy
-
-The control page is served only on `127.0.0.1:19870` and rejects cross-site requests. There is no
-telemetry and no account. The app connects to the internet only when you click Download engine,
-which fetches Intiface's official GitHub release.
+No telemetry, no account. The page only listens on `127.0.0.1`, and the only download is the
+Intiface Engine from Intiface's GitHub releases.
 
 ## For mod authors
-
-Other CET mods can send a pulse through the **Other mods** interaction:
 
 ```lua
 GetMod("nightCityHaptics").Pulse(0.8, 2)   -- strength 0–1, optional seconds
 ```
 
+Plays through the **Other mods** interaction.
+
 ## Development
 
-The current source is the unreleased 0.4.1 Rust companion. The CET mod writes `state.json`; the
-native companion mixes device output over the Buttplug protocol and stops when the game's heartbeat
-does. Python is used for build and integration-test tooling only; the app runs as a native executable.
-
-To build the Windows and Linux candidate ZIP from Linux, install Rust, a C compiler/linker,
-`clang`/`lld` and Python 3, then run:
+Builds both companions and the ZIP from Linux (Rust, `clang`/`lld`, Python 3):
 
 ```sh
 rustup target add x86_64-unknown-linux-gnu x86_64-pc-windows-msvc
 cargo install cargo-xwin --locked
-python3 tools/build_native.py                       # builds both native companions
+python3 tools/build_native.py
 python3 tools/build.py --output-dir .build/candidate
 ```
 
-The build writes the native companions into `src/companion/` and the installable ZIP into
-`.build/candidate/`. To run the checks, install LuaJIT and `websockets` for the Python test tools:
+Tests (LuaJIT, and `websockets>=15,<17` for the Python tools):
 
 ```sh
 luajit tests/cet_harness.lua
 cargo test --manifest-path rust/Cargo.toml
-cargo build --manifest-path rust/Cargo.toml --examples
-python3 -m pip install 'websockets>=15,<17'          # tests only
 python3 -m unittest discover -s tests
-python3 tools/e2e_intiface.py                        # Linux: real Intiface Engine + simulated device
+python3 tools/e2e_intiface.py      # Linux: real Intiface Engine + simulated toy
 ```
 
-## Status
-
-Version 0.4.1 (unreleased), with native Windows and Linux companions.
-Gameplay, scene timing, physical devices and Windows runtime still need playtesting.
-
-Built on [Buttplug / Intiface](https://buttplug.io) by Nonpolynomial.
+Not yet tested on real toys or on Windows. Built on [Buttplug / Intiface](https://buttplug.io)
+by Nonpolynomial.

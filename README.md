@@ -25,6 +25,18 @@ run Intiface Central on its default port (12345), the app uses that instead.
    game folder, the one that contains `bin`.
 2. Open `bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/` and run
    **`start.cmd`** on Windows or **`start.sh`** on Linux. The control page opens in your browser.
+
+   **Steam on Linux/SteamOS:** save [nch-steam-launch](https://raw.githubusercontent.com/sybeeria/NightCityHaptics/main/tools/nch-steam-launch)
+   in the game folder. In Steam → Cyberpunk 2077 → Properties → Launch Options, use:
+
+   ```sh
+   /bin/sh "/path/to/Cyberpunk 2077/nch-steam-launch" -- %command%
+   ```
+
+   Replace the path. Keep existing overrides first, wrappers after `--`, and game flags after `%command%`.
+   This starts the companion with the game and stops the instance it started when you exit.
+   Tune it on [the control page](http://127.0.0.1:19870/).
+
 3. On the first run, click **Download engine** in Settings. Put your device in pairing mode
    and the app finds it.
 4. Play. Game-driven feedback runs only during live gameplay. Menus, pause, loading screens,

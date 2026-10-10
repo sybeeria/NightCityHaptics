@@ -1,4 +1,4 @@
--- Night City Haptics 0.4.0 (CET part)
+-- Night City Haptics 0.4.1 (CET part)
 -- Reports what happens in the game to the Night City Haptics companion app by
 -- sampling about 30 times a second and writing state.json on changes/events or
 -- at a quiet 5 Hz heartbeat. The companion owns
@@ -26,11 +26,13 @@
 -- player.script:4139 OnDamageInflicted (queued to the instigator, gameObject.script:1552);
 -- psm/combatGadgetTransitions.script:442/494 (PlayerStateMachine.CombatGadget Throwing/QuickThrow);
 -- hitReactionComponent.script:2923 (BaseStatusEffect.PlayerExhausted);
--- rpgManager.script:4437-4649 UploadFromNPCToPlayerListener (UI_HUDProgressBar Active/Progress);
+-- rpgManager.script:4437-4649 UploadFromNPCToPlayerListener (HUD Active/Progress/MessageType);
+-- scriptedPuppet.script:3251-3253 BeingHacked, NPCPuppet.script:1843 Reveal,
+--   iceCounterHackEffector.script:21 Boss; preventionSystemHackerLoop.script:547 skips BeingHacked;
 -- psmImports.script:741 gamePSMMeleeWeapon Hold/ChargedHold (charged melee);
 -- blackboardDefinitions.script:753 Vehicle.RPMValue/RPMMax (car_hud.script:186, vcar_controller.script:158).
 -- Scene facts and timings checked against current vanilla .scene files.
-local mod = {version = "0.4.0"}
+local mod = {version = "0.4.1"}
 local R = {
   session = "", seq = 0, clock = 0, sampleClock = 0, writeClock = 0, overlay = false,
   loading = false, paused = false, shutdown = false, active = false, reason = "starting",
@@ -337,6 +339,12 @@ local function registerHooks()
   -- Panam's neural-link overlay: each flash is a pulse, "synchronizing" is the peak.
   hook("GameObject", "OnCustomUIAnimationEvent", function(self, e)
     if not e or NameToString(e.libraryItemName) ~= "sex_hud" or not samePlayer(self) then return end
+    -- sq027_06_panzer.scene also sends these flashes during Basilisk training
+    -- (nodes 6208/6211/6225/6232), before choice 879 sets the romance fact at 891.
+    -- A live cue may reattach an accepted scene, but the permanent fact alone
+    -- remains a baseline and never starts feedback.
+    if R.scene.playing ~= "panam" and R.scene.pending ~= "panam"
+      and Game.GetQuestsSystem():GetFactStr("sq027_panzer_sex") <= 0 then return end
     local animation = NameToString(e.animationName)
     local playing = tonumber(EnumInt(e.playbackOption)) == enum("EInkAnimationPlaybackOption", "PLAY")
     if playing and R.scene.playing ~= "panam" and R.scene.pending ~= "panam" then
@@ -359,7 +367,8 @@ local function sample(player)
   K = K or {kerenzikov = TweakDBID.new("BaseStatusEffect.KerenzikovPlayerBuff"),
     finisher = TweakDBID.new("BaseStatusEffect.PlayerInFinisherWorkspot"),
     camo = CName.new("CamoActiveOnPlayer"), johnny = CName.new("JohnnySickness"),
-    exhausted = TweakDBID.new("BaseStatusEffect.PlayerExhausted")}
+    exhausted = TweakDBID.new("BaseStatusEffect.PlayerExhausted"),
+    beingHacked = TweakDBID.new("AIQuickHackStatusEffect.BeingHacked")}
   local levels = {}
   local defs = Game.GetAllBlackboardDefs()
   local psm = player:GetPlayerStateMachineBlackboard()
@@ -494,10 +503,17 @@ local function sample(player)
     levels.phoneRing = ringing and 1 or 0
   end)
   probe("hacked", function()
-    -- The upload bar an enemy netrunner's quickhack fills on your HUD.
+    -- Ordinary uploads use Undefined, position reveals use Reveal, boss ICE uses
+    -- Boss. They apply BeingHacked; police vehicle uploads use Vehicle and skip it.
+    -- The same HUD bar also serves TwinTone scanning and perk training.
     local board = Game.GetBlackboardSystem():Get(defs.UI_HUDProgressBar)
+    local kind = FromVariant(board:GetVariant(defs.UI_HUDProgressBar.MessageType))
+    local value = kind and tonumber(EnumInt(kind))
+    local enemy = isOneOf("SimpleMessageType", value, {"Undefined", "Reveal", "Boss"})
+      and Game.GetStatusEffectSystem():HasStatusEffect(id, K.beingHacked)
+    local upload = enemy or value == enum("SimpleMessageType", "Vehicle")
     local progress = board:GetFloat(defs.UI_HUDProgressBar.Progress)
-    levels.hacked = board:GetBool(defs.UI_HUDProgressBar.Active) and .35 + .65 * clamp(progress) or 0
+    levels.hacked = upload and board:GetBool(defs.UI_HUDProgressBar.Active) and .35 + .65 * clamp(progress) or 0
   end)
   probe("oxygen", function()
     levels.oxygen = 0

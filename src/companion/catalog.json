@@ -149,7 +149,7 @@
      "description": "Judy, Kerry, Panam, River and Meredith Stout, each following its own scene's timing.",
      "default": {"on": true, "strength": 0.8, "feel": "scene"}},
     {"id": "joytoy", "category": "scenes", "kind": "event", "label": "Joytoys",
-     "description": "Jig-Jig Street and Heywood, synced to each clip with the game's own rumble rhythm.",
+     "description": "Jig-Jig Street and Heywood, synced to each clip with a pattern inspired by the game's rumble rhythm.",
      "default": {"on": true, "strength": 0.8, "feel": "scene"}},
     {"id": "braindance", "category": "scenes", "kind": "level", "label": "Braindances",
      "description": "While you are inside a braindance.",

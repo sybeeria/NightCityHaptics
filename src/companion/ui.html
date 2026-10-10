@@ -270,7 +270,8 @@ function el(tag, props = {}, ...children) {
   e.append(...children);
   return e;
 }
-let settingsQueue = Promise.resolve(), pendingSettings = 0, settingsEpoch = 0, settingsFailed = false;
+const settingsQueue = [];
+let settingsBusy = false, pendingSettings = 0, settingsEpoch = 0, settingsFailed = false;
 const pendingSaves = new Map();
 function applySettings(change) {
   if (!S) return;
@@ -308,25 +309,50 @@ function flushSaves() {
     api('settings', change).catch(() => {});
   }
 }
-function enqueue(path, body, changesSettings) {
-  if (changesSettings) { pendingSettings++; settingsEpoch++; }
-  const result = settingsQueue.catch(() => {}).then(async () => {
-    if ((path === 'try' || path === 'test-device') && settingsFailed) {
+function finishSettings(job) {
+  if (job.changesSettings) { pendingSettings--; settingsEpoch++; }
+}
+async function runSettingsQueue() {
+  if (settingsBusy || !settingsQueue.length) return;
+  settingsBusy = true;
+  const job = settingsQueue.shift();
+  try {
+    if ((job.path === 'try' || job.path === 'test-device') && settingsFailed) {
       const message = 'Settings were not saved; preview stopped.';
       toast(message, true); throw new Error(message);
     }
-    try {
-      const reply = await request(path, body);
-      return reply;
-    } catch (e) {
-      if (changesSettings) settingsFailed = true;
-      throw e;
-    }
+    job.resolve(await request(job.path, job.body));
+  } catch (e) {
+    if (job.changesSettings) settingsFailed = true;
+    job.reject(e);
+  } finally {
+    finishSettings(job);
+    settingsBusy = false;
+    runSettingsQueue();
+  }
+}
+function enqueue(path, body, changesSettings) {
+  if (changesSettings) { pendingSettings++; settingsEpoch++; }
+  const result = new Promise((resolve, reject) => {
+    const job = {path, body, changesSettings, resolve, reject};
+    if (path === 'settings' && body.enabled === false) {
+      // Off runs next after the request already on the wire. Older clicks must
+      // neither turn feedback back on nor start a queued device preview.
+      for (let i = settingsQueue.length - 1; i >= 0; i--) {
+        const previous = settingsQueue[i];
+        if (previous.path === 'settings') {
+          delete previous.body.enabled;
+          if (Object.keys(previous.body).length) continue;
+        } else if (previous.path !== 'try' && previous.path !== 'test-device') continue;
+        settingsQueue.splice(i, 1);
+        finishSettings(previous);
+        previous.resolve({ok: true, canceled: true});
+      }
+      settingsQueue.unshift(job);
+    } else settingsQueue.push(job);
+    runSettingsQueue();
   });
-  settingsQueue = result.finally(() => {
-    if (changesSettings) { pendingSettings--; settingsEpoch++; }
-  });
-  settingsQueue.catch(() => {});
+  result.catch(() => {});
   return result;
 }
 function api(path, body) {

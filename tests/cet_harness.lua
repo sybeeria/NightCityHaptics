@@ -111,6 +111,7 @@ local enums = {
   gamePSMCombatGadget = {"Default", "EquipRequest", "Equipped", "Charging", "Throwing", "WaitForUnequip", "QuickThrow"},
   questPhoneCallPhase = {"Undefined", "IncomingCall", "StartCall", "EndCall"},
   EInkAnimationPlaybackOption = {"PLAY", "STOP", "PAUSE", "RESUME", "CONTINUE", "GO_TO_START", "GO_TO_END"},
+  SimpleMessageType = {"Undefined", "Negative", "Neutral", "Vehicle", "Apartment", "Relic", "Money", "Reveal", "Boss", "Twintone", "Police", "Autodrive", "TwintoneNegative", "Connection", "DelamainTaxi"},
   gamedataItemType = {"Clo_Face", "Clo_Feet", "Clo_Head", "Clo_InnerChest", "Clo_Legs", "Clo_OuterChest", "Clo_Outfit", "Con_Ammo", "Con_Edible", "Con_Inhaler", "Con_Injector", "Con_LongLasting", "Con_Skillbook", "Cyb_Ability", "Cyb_HealingAbility", "Cyb_Launcher", "Cyb_MantisBlades", "Cyb_NanoWires", "Cyb_StrongArms", "Cyberware", "CyberwareStatsShard", "CyberwareUpgradeShard", "Fla_Launcher", "Fla_Rifle", "Fla_Shock", "Fla_Support", "Gad_Grenade", "Gen_CraftingMaterial", "Gen_DataBank", "Gen_Jewellery", "Gen_Junk", "Gen_Keycard", "Gen_Misc", "Gen_MoneyShard", "Gen_Readable", "Gen_Tarot", "GrenadeDelivery", "Grenade_Core", "Prt_AR_SMG_LMGMod", "Prt_BladeMod", "Prt_BluntMod", "Prt_BootsFabricEnhancer", "Prt_Capacitor", "Prt_FabricEnhancer", "Prt_FaceFabricEnhancer", "Prt_Fragment", "Prt_HandgunMod", "Prt_HandgunMuzzle", "Prt_HeadFabricEnhancer", "Prt_LongScope", "Prt_Magazine", "Prt_MeleeMod", "Prt_Mod", "Prt_Muzzle", "Prt_OuterTorsoFabricEnhancer", "Prt_PantsFabricEnhancer", "Prt_PowerMod", "Prt_PowerSniperScope", "Prt_Precision_Sniper_RifleMod", "Prt_Program", "Prt_RangedMod", "Prt_Receiver", "Prt_RifleMuzzle", "Prt_Scope", "Prt_ScopeRail", "Prt_ShortScope", "Prt_ShotgunMod", "Prt_SmartMod", "Prt_Stock", "Prt_TargetingSystem", "Prt_TechMod", "Prt_TechSniperScope", "Prt_ThrowableMod", "Prt_TorsoFabricEnhancer", "VendorToken", "Wea_AssaultRifle", "Wea_Axe", "Wea_Chainsword", "Wea_Fists", "Wea_GrenadeLauncher", "Wea_Hammer", "Wea_Handgun", "Wea_HeavyMachineGun", "Wea_Katana", "Wea_Knife", "Wea_LightMachineGun", "Wea_LongBlade", "Wea_Machete", "Wea_Melee", "Wea_OneHandedClub", "Wea_PrecisionRifle", "Wea_Revolver", "Wea_Rifle", "Wea_ShortBlade", "Wea_Shotgun", "Wea_ShotgunDual", "Wea_SniperRifle", "Wea_SubmachineGun", "Wea_Sword", "Wea_TwoHandedClub", "Wea_VehicleMissileLauncher", "Wea_VehiclePowerWeapon", "Count", "Invalid"},
 }
 local function ordinal(typeName, name)
@@ -128,7 +129,7 @@ local function reset()
     phone = nil, oxygen = 100, simTime = 0,
     mounted = false, combat = false, heat = 0, health = 100, effects = {}, uploads = {}, facts = {},
     speed = 0, gear = 1, handbrake = 0, slip = 0, rpm = 0, rpmMax = 0, braindance = false, weapon = "Wea_Shotgun",
-    hacked = false, hackProgress = 0,
+    hacked = false, hackProgress = 0, hackType = "Undefined",
     position = {x = 0, y = 0, z = 0}, levels = {Level = 10, Espionage = 0}}
 end
 reset()
@@ -160,7 +161,10 @@ Game = {
     if key == "Active" and board == defs.UI_HUDProgressBar then return world.hacked end
     return false end,
     GetFloat = function(_, key) if key == "Progress" and board == defs.UI_HUDProgressBar then return world.hackProgress end; return 0 end,
-    GetVariant = function(_, key) if key == "PhoneCallInformation" then return world.phone end end} end} end,
+    GetVariant = function(_, key)
+      if key == "PhoneCallInformation" then return world.phone end
+      if key == "MessageType" and board == defs.UI_HUDProgressBar then return Enum.new("SimpleMessageType", world.hackType) end
+    end} end} end,
   GetTimeSystem = function() return {GetSimTime = function() return world.simTime end, IsPausedState = function() return world.paused end, IsTimeDilationActive = function() return false end} end,
   GetStatPoolsSystem = function() return {GetStatPoolValue = function(_, _, kind) return kind == "Oxygen" and world.oxygen or world.health end, GetStatPoolMaxPointValue = function() return 400 end} end,
   GetStatusEffectSystem = function() return {
@@ -546,6 +550,11 @@ hud("random", "STOP")
 check(eventIds() == "" and next(state().scene) == nil, "a Panam STOP cannot create a scene")
 hud("synchronizing", "STOP")
 check(eventIds() == "", "an isolated synchronizing STOP cannot invent an encounter")
+hud("random", "PLAY"); hud("MAIN", "PLAY"); hud("synchronizing", "PLAY"); frames(.1)
+check(eventIds() == "" and next(state().scene) == nil,
+  "Basilisk training's identical sex_hud PLAY cues are silent before the romance choice")
+world.facts.sq027_panzer_sex = 1; frames(.1)
+check(eventIds() == "" and next(state().scene) == nil, "the accepted choice only arms the full Panam scene")
 events.onOverlayOpen(); hud("MAIN", "PLAY"); frames(1)
 check(eventIds() == "" and next(state().scene) == nil, "gated live Panam cue waits without emitting output")
 events.onOverlayClose(); frames(.1)
@@ -555,6 +564,14 @@ mark = lastNumber(); hud("MAIN", "PLAY")
 check(idsSince(mark) == "romance:pulse", "later Panam cue accents the restored base track")
 mark = lastNumber(); hud("synchronizing", "STOP"); hud("MAIN", "STOP")
 check(idsSince(mark) == "" and state().scene.name == "panam", "active-scene STOP cues neither pulse nor replace its track")
+
+fresh(function() world.facts.sq027_panzer_sex = 1 end)
+check(eventIds() == "" and next(state().scene) == nil, "a permanent Panam fact remains a silent baseline on attachment")
+hud("random", "PLAY")
+check(eventIds() == "romance:panam,romance:pulse" and state().scene.name == "panam",
+  "a verified live cue can reattach the accepted scene after CET starts")
+fire("InvisibleSceneStash.OnQuestDressPlayer", {}, {})
+check(last()[2] == "romance:end" and next(state().scene) == nil, "reattached Panam still ends on dress")
 
 fresh(); world.facts.q003_stout_sex_agreed = 1; frames(.1)
 events.onOverlayOpen(); fire("InvisibleSceneStash.OnQuestUndressPlayer", {}, {}); frames(1)
@@ -748,8 +765,33 @@ mark = lastNumber()
 world.effects["BaseStatusEffect.PlayerExhausted"] = true; frames(.2)
 check(idsSince(mark) == "exhausted", "running out of stamina is reported once")
 world.effects["BaseStatusEffect.PlayerExhausted"] = nil
+world.effects["AIQuickHackStatusEffect.BeingHacked"] = true
 world.hacked, world.hackProgress = true, .5; frames(.1)
 check(math.abs(state().levels.hacked - .68) < .01, "a netrunner upload builds with its progress")
+for _, kind in ipairs({"Undefined", "Reveal", "Boss"}) do
+  world.hackType = kind; frames(.1)
+  check(math.abs(state().levels.hacked - .68) < .01, "real enemy upload retains its " .. kind .. " progress")
+end
+world.effects["AIQuickHackStatusEffect.BeingHacked"] = nil
+world.hackType = "Undefined"; frames(.1)
+check(state().levels.hacked == 0, "perk training's untyped HUD bar is not an enemy upload")
+for _, kind in ipairs({"Twintone", "Connection", "Neutral", "Money", "Relic"}) do
+  world.hackType = kind; frames(.1)
+  check(state().levels.hacked == 0, "unrelated " .. kind .. " progress is silent")
+end
+world.hackType = "Twintone"; world.effects["AIQuickHackStatusEffect.BeingHacked"] = true; frames(.1)
+check(state().levels.hacked == 0, "a TwinTone bar never borrows a stale enemy-hack status")
+world.effects["AIQuickHackStatusEffect.BeingHacked"] = nil
+world.hackType = "Vehicle"; frames(.1)
+check(math.abs(state().levels.hacked - .68) < .01, "police vehicle hacking intentionally has no BeingHacked status")
+world.hackProgress = 0; frames(.1)
+check(state().levels.hacked == .35, "a verified upload starts at its minimum strength")
+world.hackProgress = 1; frames(.1)
+check(state().levels.hacked == 1, "a verified upload reaches full strength")
+world.menu = true; frames(.1)
+check(next(state().levels) == nil, "verified enemy upload respects the menu gate")
+world.menu = false; frames(.1)
+check(state().levels.hacked == 1, "ongoing verified upload resumes after a menu")
 world.hacked = false; frames(.1)
 check(state().levels.hacked == 0, "the upload level ends with the bar")
 world.psm.MeleeWeapon = ordinal("gamePSMMeleeWeapon", "Hold"); frames(.5)

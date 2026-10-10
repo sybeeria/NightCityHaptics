@@ -13,7 +13,7 @@ use std::{
         Arc, Mutex,
     },
     thread::{self, JoinHandle},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 const MAX_BODY: usize = 262144;
@@ -397,16 +397,54 @@ impl Drop for Server {
     }
 }
 
-/// Probe directly over a loopback socket, with no environment proxy or unbounded body.
+/// Apply the same deadline to every read/write rather than resetting it when
+/// a peer supplies another byte. A slow unrelated listener must not hold startup.
+struct ProbeStream {
+    socket: TcpStream,
+    deadline: Instant,
+}
+impl ProbeStream {
+    fn remaining(&self) -> io::Result<Duration> {
+        self.deadline
+            .checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| io::Error::new(io::ErrorKind::TimedOut, "Instance probe timed out"))
+    }
+}
+impl Read for ProbeStream {
+    fn read(&mut self, bytes: &mut [u8]) -> io::Result<usize> {
+        self.socket.set_read_timeout(Some(self.remaining()?))?;
+        self.socket.read(bytes)
+    }
+}
+impl Write for ProbeStream {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        self.socket.set_write_timeout(Some(self.remaining()?))?;
+        self.socket.write(bytes)
+    }
+    fn flush(&mut self) -> io::Result<()> {
+        self.remaining()?;
+        self.socket.flush()
+    }
+}
+
+/// Probe directly over a loopback socket, with no environment proxy, unbounded
+/// body, or response trickle that extends the one-second startup deadline.
 pub fn already_running(port: u16) -> bool {
-    let Ok(mut stream) = TcpStream::connect_timeout(
+    already_running_with_timeout(port, Duration::from_secs(1))
+}
+fn already_running_with_timeout(port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    let Ok(stream) = TcpStream::connect_timeout(
         &SocketAddrV4::new(Ipv4Addr::LOCALHOST, port).into(),
-        Duration::from_secs(1),
+        timeout,
     ) else {
         return false;
     };
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(1)));
-    let _ = stream.set_write_timeout(Some(Duration::from_secs(1)));
+    let mut stream = ProbeStream {
+        socket: stream,
+        deadline,
+    };
     if write!(
         stream,
         "GET /api/ping HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n"
@@ -465,6 +503,9 @@ pub fn already_running(port: u16) -> bool {
     } else if reader.take(65537).read_to_end(&mut bytes).is_err() || bytes.len() > 65536 {
         return false;
     }
+    if Instant::now() >= deadline {
+        return false;
+    }
     serde_json::from_slice::<Value>(&bytes)
         .map(|value| value.is_object() && value["app"] == "night-city-haptics")
         .unwrap_or(false)
@@ -473,6 +514,15 @@ pub fn already_running(port: u16) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn read_probe_request(stream: &mut TcpStream) {
+        let mut request = Vec::new();
+        while !request.ends_with(b"\r\n\r\n") {
+            let mut byte = [0; 1];
+            stream.read_exact(&mut byte).unwrap();
+            request.push(byte[0]);
+            assert!(request.len() <= 1024);
+        }
+    }
     fn parse(bytes: &[u8]) -> Request {
         read_request(&mut io::Cursor::new(bytes))
             .unwrap_or_else(|_| panic!("invalid fixture"))
@@ -530,5 +580,76 @@ mod tests {
             read_request(&mut io::Cursor::new(raw)).err().unwrap().code,
             431
         );
+    }
+    #[test]
+    fn instance_probe_has_one_deadline_for_slow_status_headers_and_body() {
+        let body = b"{\"app\":\"night-city-haptics\"}";
+        let status = b"HTTP/1.1 200 OK\r\n";
+        let headers = format!("Content-Length: {}\r\n\r\n", body.len());
+        for phase in 0..3 {
+            let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let (prefix, trickle) = match phase {
+                0 => (
+                    Vec::new(),
+                    [status.as_slice(), headers.as_bytes(), body.as_slice()].concat(),
+                ),
+                1 => (
+                    status.to_vec(),
+                    [headers.as_bytes(), body.as_slice()].concat(),
+                ),
+                _ => (
+                    [status.as_slice(), headers.as_bytes()].concat(),
+                    body.to_vec(),
+                ),
+            };
+            let worker = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream
+                    .set_read_timeout(Some(Duration::from_secs(1)))
+                    .unwrap();
+                read_probe_request(&mut stream);
+                if stream.write_all(&prefix).is_err() {
+                    return;
+                }
+                for byte in trickle {
+                    thread::sleep(Duration::from_millis(40));
+                    if stream.write_all(&[byte]).is_err() {
+                        break;
+                    }
+                }
+            });
+            let began = Instant::now();
+            assert!(!already_running_with_timeout(
+                port,
+                Duration::from_millis(120)
+            ));
+            assert!(
+                began.elapsed() < Duration::from_millis(750),
+                "phase {phase} extended the deadline"
+            );
+            worker.join().unwrap();
+        }
+    }
+    #[test]
+    fn instance_probe_accepts_a_complete_response_within_the_deadline() {
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let worker = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            read_probe_request(&mut stream);
+            let body = "{\"app\":\"night-city-haptics\"}";
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        });
+        assert!(already_running_with_timeout(port, Duration::from_secs(1)));
+        worker.join().unwrap();
     }
 }

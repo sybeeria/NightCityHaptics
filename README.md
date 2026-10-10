@@ -20,7 +20,7 @@ app uses that instead.
 
 ## Setup
 
-1. Download the current candidate [`NightCityHaptics-0.4.0.zip`](dist/NightCityHaptics-0.4.0.zip)
+1. Download the current candidate [`NightCityHaptics-0.4.1.zip`](dist/NightCityHaptics-0.4.1.zip)
    and extract it into the game folder (the one that contains `bin`). A GitHub release has
    not been published yet.
 2. In `bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/`, run **`start.cmd`**
@@ -129,7 +129,7 @@ Strength is a share of Max strength.
 
 - **Romance:** Judy, Kerry, Panam, River and Meredith Stout each have their own track. Judy, Kerry
   and Panam switch to shorter tracks for the censored cut.
-- **Joytoys:** Jig-Jig Street and Heywood restart their track at each clip, in the game's own
+- **Joytoys:** Jig-Jig Street and Heywood restart their track at each clip, using a pattern inspired by the game's
   rumble rhythm.
 - Tracks fade out when a scene ends. Loading a save after a romance doesn't replay it.
 
@@ -158,7 +158,7 @@ GetMod("nightCityHaptics").Pulse(0.8, 2)   -- strength 0–1, optional seconds
 
 ## Development
 
-The current source is the unreleased 0.4.0 Rust companion. The CET mod writes `state.json`; the
+The current source is the unreleased 0.4.1 Rust companion. The CET mod writes `state.json`; the
 native companion mixes device output over the Buttplug protocol and stops when the game's heartbeat
 does. Python is used for build and integration-test tooling only; the app runs as a native executable.
 
@@ -186,7 +186,7 @@ python3 tools/e2e_intiface.py                        # Linux: real Intiface Engi
 
 ## Status
 
-Version 0.4.0 (unreleased), with native Windows and Linux companions.
+Version 0.4.1 (unreleased), with native Windows and Linux companions.
 Gameplay, scene timing, physical devices and Windows runtime still need playtesting.
 
 Built on [Buttplug / Intiface](https://buttplug.io) by Nonpolynomial.

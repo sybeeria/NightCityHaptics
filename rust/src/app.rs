@@ -587,6 +587,7 @@ impl App {
 
     pub fn save(&mut self, changes: &Value) -> Result<(), String> {
         let changes = changes.as_object().ok_or("Settings must be an object")?;
+        let stop_requested = changes.get("enabled") == Some(&Value::Bool(false));
         validate_options(
             changes,
             &[
@@ -658,21 +659,50 @@ impl App {
                 merged[key] = value.clone();
             }
         }
+        if merged["devices"]
+            .as_object()
+            .is_some_and(|devices| devices.len() > 64)
+        {
+            return Err("At most 64 device settings can be saved".into());
+        }
         let settings = haptics::normalize_settings(&merged, &self.catalog);
+        validate_settings_size(&settings)?;
         let address_changed = settings["intiface_address"] != self.settings["intiface_address"];
-        write_json(&self.settings_path, &settings).map_err(|e| e.to_string())?;
+        if let Err(error) = write_json(&self.settings_path, &settings) {
+            // An explicit Off remains effective even if its persistence failed.
+            // Do not publish the other settings from this failed transaction.
+            if stop_requested {
+                self.settings["enabled"] = json!(false);
+                self.stop_feedback();
+            }
+            return Err(error.to_string());
+        }
         self.settings = settings;
         if address_changed {
             self.disconnect("Address changed");
             self.engine.stop();
             self.started_engine_at = None;
             self.next_connect = 0.;
+        } else if stop_requested {
+            self.stop_feedback();
         }
         Ok(())
+    }
+    fn stop_feedback(&mut self) {
+        // Cancel tests already running when Off was requested. A subsequent
+        // explicit device Test can still start independently of the master mix.
+        self.outputs.reset();
+        if let Some(client) = &mut self.client {
+            if let Err(error) = client.stop_all() {
+                self.disconnect(&format!("Connection lost while stopping: {error}"));
+                self.next_connect = buttplug::monotonic() + 1.;
+            }
+        }
     }
     pub fn reset(&mut self) -> Result<(), String> {
         let mut settings = self.settings.clone();
         settings["interactions"] = haptics::default_settings(&self.catalog)["interactions"].clone();
+        validate_settings_size(&settings)?;
         write_json(&self.settings_path, &settings).map_err(|e| e.to_string())?;
         self.settings = settings;
         Ok(())
@@ -809,6 +839,7 @@ impl App {
                 self.next_connect = now + 1.;
             }
         }
+        let gate_clock = buttplug::monotonic();
         let raw = read_json(&self.mod_dir.join("state.json")).unwrap_or(Value::Null);
         let events = self.game.update(&raw, now);
         let active = self.game.active(now);
@@ -839,9 +870,21 @@ impl App {
         if let Some(client) = &mut self.client {
             let quiet =
                 self.settings["enabled"] != true || (!active && self.mixer.voices.is_empty());
-            let result =
-                self.outputs
-                    .update(client, self.output, &self.settings["devices"], now, quiet);
+            // Anchor the remaining CET freshness to the real clock. Standalone
+            // page Try/device Test works without CET; mixing Try with game
+            // output must never remove the game's write deadline.
+            let deadline = (active || self.mixer.voices.contains_key("test"))
+                .then(|| gate_clock + self.game.changed.unwrap_or(now) + self.game.timeout - now);
+            let began = buttplug::monotonic();
+            let result = self.outputs.update_before(
+                client,
+                self.output,
+                &self.settings["devices"],
+                now,
+                quiet,
+                deadline,
+            );
+            now += buttplug::monotonic() - began;
             if let Err(error) = result {
                 self.disconnect(&format!("Connection lost: {error}"));
                 self.next_connect = now + 1.;
@@ -1059,6 +1102,14 @@ impl App {
     }
 }
 
+fn validate_settings_size(settings: &Value) -> Result<(), String> {
+    let bytes = serde_json::to_vec_pretty(settings).map_err(|error| error.to_string())?;
+    if bytes.len() as u64 > MAX_JSON {
+        return Err("Settings exceed the 1 MiB persistence limit".into());
+    }
+    Ok(())
+}
+
 fn rounded(number: f64, digits: usize) -> f64 {
     // Decimal formatting rounds the original binary float. Multiplication by
     // 10^digits can erase the small error in the original binary floating-point value.
@@ -1159,6 +1210,177 @@ fn validate_address(value: &Value) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::VecDeque;
+
+    struct SimulatedWire {
+        sent: Arc<Mutex<Vec<Value>>>,
+        replies: VecDeque<String>,
+        fail_writes: Arc<AtomicBool>,
+    }
+    impl buttplug::Wire for SimulatedWire {
+        fn send(&mut self, text: &str) -> Result<(), String> {
+            if self.fail_writes.load(Ordering::Acquire) {
+                return Err("Simulated write failure".into());
+            }
+            let batch: Value = serde_json::from_str(text).unwrap();
+            for command in batch.as_array().unwrap() {
+                self.sent.lock().unwrap().push(command.clone());
+                let (kind, data) = command.as_object().unwrap().iter().next().unwrap();
+                let reply = match kind.as_str() {
+                    "RequestServerInfo" => {
+                        json!({"ServerInfo":{"Id":data["Id"], "ServerName":"Offline test", "MessageVersion":3, "MaxPingTime":0}})
+                    }
+                    "RequestDeviceList" => {
+                        json!({"DeviceList":{"Id":data["Id"], "Devices":[{"DeviceIndex":0,"DeviceName":"Offline test device","DeviceMessages":{"ScalarCmd":[{"ActuatorType":"Vibrate","StepCount":20}],"StopDeviceCmd":{}}}]}})
+                    }
+                    _ => json!({"Ok":{"Id":data["Id"]}}),
+                };
+                self.replies.push_back(json!([reply]).to_string());
+            }
+            Ok(())
+        }
+        fn recv(&mut self, _: f64) -> Result<Option<String>, String> {
+            Ok(self.replies.pop_front())
+        }
+        fn close(&mut self) {}
+    }
+    fn simulated_client(app: &mut App) -> (Arc<Mutex<Vec<Value>>>, Arc<AtomicBool>) {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let fail_writes = Arc::new(AtomicBool::new(false));
+        app.client = Some(
+            buttplug::Client::connect_wire(
+                Box::new(SimulatedWire {
+                    sent: Arc::clone(&sent),
+                    replies: VecDeque::new(),
+                    fail_writes: Arc::clone(&fail_writes),
+                }),
+                "Offline test",
+            )
+            .unwrap(),
+        );
+        sent.lock().unwrap().clear();
+        (sent, fail_writes)
+    }
+    struct DelayedWire {
+        inner: SimulatedWire,
+        delayed: Arc<AtomicBool>,
+        closed: Arc<AtomicBool>,
+    }
+    impl buttplug::Wire for DelayedWire {
+        fn send(&mut self, text: &str) -> Result<(), String> {
+            let batch: Value = serde_json::from_str(text).unwrap();
+            let positive = batch.as_array().unwrap().iter().any(|command| {
+                command["ScalarCmd"]["Scalars"]
+                    .as_array()
+                    .is_some_and(|scalars| {
+                        scalars
+                            .iter()
+                            .any(|scalar| scalar["Scalar"].as_f64().unwrap_or(0.) > 0.)
+                    })
+            });
+            if positive && !self.delayed.swap(true, Ordering::AcqRel) {
+                thread::sleep(Duration::from_millis(80));
+            }
+            self.inner.send(text)
+        }
+        fn recv(&mut self, timeout: f64) -> Result<Option<String>, String> {
+            self.inner.recv(timeout)
+        }
+        fn close(&mut self) {
+            self.closed.store(true, Ordering::Release);
+        }
+    }
+    fn delayed_client(app: &mut App) -> (Arc<Mutex<Vec<Value>>>, Arc<AtomicBool>, Arc<AtomicBool>) {
+        let sent = Arc::new(Mutex::new(Vec::new()));
+        let delayed = Arc::new(AtomicBool::new(false));
+        let closed = Arc::new(AtomicBool::new(false));
+        let mut client = buttplug::Client::connect_wire(
+            Box::new(DelayedWire {
+                inner: SimulatedWire {
+                    sent: Arc::clone(&sent),
+                    replies: VecDeque::new(),
+                    fail_writes: Arc::new(AtomicBool::new(false)),
+                },
+                delayed: Arc::clone(&delayed),
+                closed: Arc::clone(&closed),
+            }),
+            "Offline delayed fixture",
+        )
+        .unwrap();
+        let mut second = client.devices[&0].clone();
+        second["DeviceIndex"] = json!(1);
+        client.devices.insert(1, second);
+        app.client = Some(client);
+        sent.lock().unwrap().clear();
+        (sent, delayed, closed)
+    }
+    fn positive_devices(sent: &Arc<Mutex<Vec<Value>>>) -> Vec<u64> {
+        sent.lock()
+            .unwrap()
+            .iter()
+            .filter_map(|command| {
+                command["ScalarCmd"]["Scalars"]
+                    .as_array()
+                    .filter(|scalars| {
+                        scalars
+                            .iter()
+                            .any(|scalar| scalar["Scalar"].as_f64().unwrap_or(0.) > 0.)
+                    })
+                    .map(|_| command["ScalarCmd"]["DeviceIndex"].as_u64().unwrap())
+            })
+            .collect()
+    }
+    #[test]
+    fn slow_output_cannot_send_to_later_devices_after_heartbeat_expiry_even_with_try() {
+        for preview in [false, true] {
+            let (_temp, mut app) = fixture();
+            let (sent, delayed, closed) = delayed_client(&mut app);
+            app.game.timeout = 0.03;
+            for seq in [1, 2] {
+                if seq == 2 && preview {
+                    app.try_interaction("levelUp", 20.1).unwrap();
+                }
+                write_json(
+                    &app.mod_dir.join("state.json"),
+                    &json!({
+                        "v":2,"session":"offline-slow-output","seq":seq,"t":20. + seq as f64 / 10.,
+                        "active":true,"paused":false,"levels":{"engine":1.},"events":[]
+                    }),
+                )
+                .unwrap();
+                app.tick(20. + seq as f64 / 10.).unwrap();
+            }
+            assert!(delayed.load(Ordering::Acquire));
+            assert_eq!(positive_devices(&sent), vec![0], "preview={preview}");
+            assert!(closed.load(Ordering::Acquire));
+            assert!(app.client.is_none());
+            assert_eq!(app.output, 0.);
+        }
+    }
+    #[test]
+    fn standalone_try_and_device_tests_do_not_require_a_game_heartbeat_deadline() {
+        for device_test in [false, true] {
+            let (_temp, mut app) = fixture();
+            let (sent, delayed, closed) = delayed_client(&mut app);
+            app.game.timeout = 0.03;
+            if device_test {
+                for key in ["device:0", "device:1"] {
+                    app.test_device(key, 20.).unwrap();
+                }
+            } else {
+                app.try_interaction("levelUp", 20.).unwrap();
+            }
+            app.tick(20.1).unwrap();
+            assert!(delayed.load(Ordering::Acquire));
+            assert_eq!(
+                positive_devices(&sent),
+                vec![0, 1],
+                "device_test={device_test}"
+            );
+            assert!(!closed.load(Ordering::Acquire));
+            assert!(app.client.is_some());
+        }
+    }
     #[test]
     fn status_and_test_strength_rounding_matches_python_binary_float_cases() {
         assert_eq!(rounded(0.225, 2), 0.23);
@@ -1314,6 +1536,229 @@ mod tests {
             assert_eq!(app.settings[key], before[key]);
         }
         assert_eq!(read_json(&app.settings_path).unwrap(), app.settings);
+    }
+    #[test]
+    fn master_off_stops_existing_device_test_and_later_explicit_test_still_works() {
+        let (_temp, mut app) = fixture();
+        let (sent, _fail) = simulated_client(&mut app);
+        let key = buttplug::summary(&app.client.as_ref().unwrap().devices[&0])["key"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        app.test_device(&key, 10.).unwrap();
+        app.tick(10.1).unwrap();
+        assert!(sent
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|command| command.get("ScalarCmd").is_some()));
+        sent.lock().unwrap().clear();
+        app.save(&json!({"enabled":false})).unwrap();
+        assert!(app.outputs.hold.is_empty());
+        assert!(sent
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|command| command.get("StopAllDevices").is_some()));
+        app.tick(10.2).unwrap();
+        assert_eq!(app.output, 0.);
+        sent.lock().unwrap().clear();
+        app.test_device(&key, 10.3).unwrap();
+        app.tick(10.4).unwrap();
+        assert!(sent
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|command| command["ScalarCmd"]["Scalars"][0]["Scalar"] == 0.5));
+        assert_eq!(app.settings["enabled"], false);
+    }
+    #[test]
+    fn master_off_retires_queued_motion_and_warm_followers_before_a_new_test() {
+        struct CaptureSink {
+            devices: std::collections::BTreeMap<u32, Value>,
+            blocked: bool,
+            commands: Vec<Value>,
+        }
+        impl buttplug::CommandSink for CaptureSink {
+            fn devices(&self) -> &std::collections::BTreeMap<u32, Value> {
+                &self.devices
+            }
+            fn generation(&self, _: u32) -> u64 {
+                1
+            }
+            fn busy(&self, _: u32) -> bool {
+                self.blocked
+            }
+            fn send(&mut self, kind: &str, fields: Value, _: Option<u32>) -> Result<u32, String> {
+                let mut command = Map::new();
+                command.insert(kind.to_owned(), fields);
+                self.commands.push(Value::Object(command));
+                Ok(1)
+            }
+        }
+        let (_temp, mut app) = fixture();
+        let (sent, _fail) = simulated_client(&mut app);
+        let device = json!({"DeviceIndex":0,"DeviceName":"Offline test device", "DeviceMessages":{
+            "ScalarCmd":[{"ActuatorType":"Vibrate","StepCount":20},{"ActuatorType":"Constrict","StepCount":20},{"ActuatorType":"Temperature","StepCount":20}],
+            "RotateCmd":[{"StepCount":20}], "LinearCmd":[{"StepCount":20}], "StopDeviceCmd":{}}});
+        app.client
+            .as_mut()
+            .unwrap()
+            .devices
+            .insert(0, device.clone());
+        let preference = buttplug::settings_key(&device);
+        app.save(&json!({"devices":{preference:{"outputs":{"vibrate":true,"rotate":true,"stroke":true,"constrict":true,"heat":true}}}})).unwrap();
+        let mut sink = CaptureSink {
+            devices: std::collections::BTreeMap::from([(0, device)]),
+            blocked: false,
+            commands: Vec::new(),
+        };
+        // Warm followers, flip rotation, and run strokes before leaving pending
+        // scalar/rotation/stroke commands blocked behind backpressure.
+        for (now, strength) in [(0., 1.), (0.1, 0.1), (0.3, 1.), (1., 0.9)] {
+            app.outputs
+                .update(&mut sink, strength, &app.settings["devices"], now, false)
+                .unwrap();
+        }
+        assert!(sink
+            .commands
+            .iter()
+            .any(|command| command["ScalarCmd"]["Scalars"]
+                .as_array()
+                .is_some_and(|scalars| scalars
+                    .iter()
+                    .any(|scalar| scalar["ActuatorType"] == "Temperature"
+                        && scalar["Scalar"].as_f64().unwrap_or(0.) > 0.))));
+        sink.blocked = true;
+        sink.commands.clear();
+        app.outputs
+            .update(&mut sink, 0.9, &app.settings["devices"], 1.4, false)
+            .unwrap();
+        assert!(sink.commands.is_empty());
+        app.outputs.hold.insert(0, (0.9, 10.));
+        app.save(&json!({"enabled":false})).unwrap();
+        assert!(app.outputs.hold.is_empty());
+        assert!(sent
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|command| command.get("StopAllDevices").is_some()));
+        // Start immediately, with no quiet update between Off and Test.
+        app.test_device("device:0", 1.45).unwrap();
+        sink.blocked = false;
+        let mut expected_sink = CaptureSink {
+            devices: sink.devices.clone(),
+            blocked: false,
+            commands: Vec::new(),
+        };
+        let mut expected = buttplug::Outputs::new();
+        expected.hold.insert(0, (0.5, 2.25));
+        for now in [1.46, 1.7, 2.1, 2.3] {
+            app.outputs
+                .update(&mut sink, 0., &app.settings["devices"], now, true)
+                .unwrap();
+            expected
+                .update(&mut expected_sink, 0., &app.settings["devices"], now, true)
+                .unwrap();
+        }
+        assert!(expected_sink
+            .commands
+            .iter()
+            .any(|command| command["LinearCmd"]["Vectors"][0]["Position"] == 0.5));
+        assert_eq!(sink.commands, expected_sink.commands);
+    }
+    #[test]
+    fn master_off_remains_effective_when_persistence_or_stop_transport_fails() {
+        let (_temp, mut app) = fixture();
+        let (sent, fail) = simulated_client(&mut app);
+        app.outputs.hold.insert(0, (0.5, 20.));
+        app.settings_path = app.mod_dir.join("missing/settings.json");
+        assert!(app
+            .save(&json!({"enabled":false,"max_strength":0.1}))
+            .is_err());
+        assert_eq!(app.settings["enabled"], false);
+        assert_eq!(app.settings["max_strength"], 0.7);
+        assert!(app.outputs.hold.is_empty());
+        assert!(sent
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|command| command.get("StopAllDevices").is_some()));
+        app.settings_path = app.mod_dir.join("settings.json");
+        app.save(&json!({"enabled":true})).unwrap();
+        app.outputs.hold.insert(0, (0.5, 20.));
+        fail.store(true, Ordering::Release);
+        app.save(&json!({"enabled":false})).unwrap();
+        assert_eq!(app.settings["enabled"], false);
+        assert_eq!(read_json(&app.settings_path).unwrap()["enabled"], false);
+        assert!(app.outputs.hold.is_empty());
+        assert!(app.client.is_none());
+    }
+    #[test]
+    fn device_limit_rejects_new_preferences_and_retains_existing_updates() {
+        let (_temp, mut app) = fixture();
+        let devices: Map<String, Value> = (0..64)
+            .map(|index| (format!("device-{index}"), json!({"on":false})))
+            .collect();
+        app.save(&json!({"enabled":false,"devices":devices}))
+            .unwrap();
+        let saved = fs::read(&app.settings_path).unwrap();
+        let before = app.settings.clone();
+        assert!(app
+            .save(&json!({"devices":{"new-device":{"on":false}}}))
+            .is_err());
+        assert_eq!(fs::read(&app.settings_path).unwrap(), saved);
+        assert_eq!(app.settings, before);
+        app.save(&json!({"devices":{"device-63":{"strength":0.2}}}))
+            .unwrap();
+        let reloaded = App::new(
+            app.mod_dir.clone(),
+            app.assets.clone(),
+            Some(app.settings_path.clone()),
+        )
+        .unwrap();
+        assert_eq!(reloaded.settings, app.settings);
+        assert_eq!(reloaded.settings["enabled"], false);
+        assert_eq!(reloaded.settings["devices"]["device-63"]["strength"], 0.2);
+    }
+    #[test]
+    fn oversized_settings_transaction_preserves_roundtrip_and_disabled_master() {
+        let (_temp, mut app) = fixture();
+        app.save(&json!({"enabled":false})).unwrap();
+        for batch in 0..7 {
+            let devices: Map<String, Value> = (0..8)
+                .map(|index| {
+                    (
+                        format!("{:02}:{}", batch * 8 + index, "a".repeat(17000)),
+                        json!({"on":false}),
+                    )
+                })
+                .collect();
+            app.save(&json!({"devices":devices})).unwrap();
+        }
+        let saved = fs::read(&app.settings_path).unwrap();
+        let before = app.settings.clone();
+        assert!(saved.len() as u64 <= MAX_JSON);
+        let devices: Map<String, Value> = (56..64)
+            .map(|index| {
+                (
+                    format!("{index:02}:{}", "a".repeat(17000)),
+                    json!({"on":false}),
+                )
+            })
+            .collect();
+        let error = app.save(&json!({"devices":devices})).unwrap_err();
+        assert!(error.contains("persistence limit"));
+        assert_eq!(fs::read(&app.settings_path).unwrap(), saved);
+        assert_eq!(app.settings, before);
+        let reloaded = App::new(
+            app.mod_dir.clone(),
+            app.assets.clone(),
+            Some(app.settings_path.clone()),
+        )
+        .unwrap();
+        assert_eq!(reloaded.settings, app.settings);
+        assert_eq!(reloaded.settings["enabled"], false);
     }
     #[test]
     fn every_scene_resumes_after_gameplay_and_pause_gates_without_replaying_leftovers() {

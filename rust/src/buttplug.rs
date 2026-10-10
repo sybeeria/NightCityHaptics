@@ -26,6 +26,14 @@ const RECV_FRAMES: usize = 64;
 const RECV_WORK: f64 = 0.01;
 const MAX_PENDING: usize = 512;
 const BATTERY_EVERY: f64 = 60.;
+const EXPIRED_OUTPUT: &str = "Game heartbeat expired during output";
+
+fn check_output_deadline(deadline: f64) -> Result<(), String> {
+    if !deadline.is_finite() || monotonic() >= deadline {
+        return Err(EXPIRED_OUTPUT.into());
+    }
+    Ok(())
+}
 
 pub fn monotonic() -> f64 {
     static EPOCH: OnceLock<Instant> = OnceLock::new();
@@ -176,12 +184,20 @@ pub struct WebSocket {
 }
 pub trait Wire: Send {
     fn send(&mut self, text: &str) -> Result<(), String>;
+    fn send_before(&mut self, text: &str, deadline: f64) -> Result<(), String> {
+        check_output_deadline(deadline)?;
+        self.send(text)?;
+        check_output_deadline(deadline)
+    }
     fn recv(&mut self, timeout: f64) -> Result<Option<String>, String>;
     fn close(&mut self);
 }
 impl Wire for WebSocket {
     fn send(&mut self, text: &str) -> Result<(), String> {
         self.send(text)
+    }
+    fn send_before(&mut self, text: &str, deadline: f64) -> Result<(), String> {
+        self.send_before(text, deadline)
     }
     fn recv(&mut self, timeout: f64) -> Result<Option<String>, String> {
         self.recv(timeout)
@@ -360,6 +376,9 @@ impl WebSocket {
         })
     }
     fn send_message(&mut self, message: Message, deadline: Instant) -> Result<(), String> {
+        if Instant::now() >= deadline {
+            return Err("Send timed out".into());
+        }
         match self.writer.send(message) {
             Ok(()) => return Ok(()),
             Err(tungstenite::Error::Io(e)) if e.kind() == io::ErrorKind::WouldBlock => (),
@@ -383,6 +402,23 @@ impl WebSocket {
             Message::Text(text.to_owned().into()),
             Instant::now() + Duration::from_secs(2),
         )
+    }
+    fn send_before(&mut self, text: &str, deadline: f64) -> Result<(), String> {
+        let began = Instant::now();
+        let result = check_output_deadline(deadline).and_then(|_| {
+            let remaining = (deadline - monotonic()).clamp(0., 2.);
+            self.send_message(
+                Message::Text(text.to_owned().into()),
+                began + Duration::from_secs_f64(remaining),
+            )?;
+            check_output_deadline(deadline)
+        });
+        if result.is_err() {
+            // A partially written positive frame cannot be replaced by a stop.
+            // Shut down TCP before cleanup could flush tungstenite's old buffer.
+            let _ = self.socket.shutdown(Shutdown::Both);
+        }
+        result
     }
     fn frame(&mut self) -> Result<Option<(bool, u8, Vec<u8>)>, String> {
         if self.buffer.len() < 2 {
@@ -696,9 +732,19 @@ impl Client {
     fn send_timeout(
         &mut self,
         kind: &str,
+        fields: Value,
+        device: Option<u32>,
+        timeout: f64,
+    ) -> Result<u32, String> {
+        self.send_bounded(kind, fields, device, timeout, None)
+    }
+    fn send_bounded(
+        &mut self,
+        kind: &str,
         mut fields: Value,
         device: Option<u32>,
         timeout: f64,
+        deadline: Option<f64>,
     ) -> Result<u32, String> {
         if self.closed {
             return Err("Intiface connection is closed".into());
@@ -727,7 +773,16 @@ impl Client {
             serde_json::to_string(&vec![Value::Object(command)]).map_err(|e| e.to_string())?;
         // A wire failure is returned directly. The cleanup path calls send once
         // for its best-effort stop, so recursive failure handling must not occur.
-        self.ws.send(&text)?;
+        let result = match deadline {
+            Some(deadline) => self.ws.send_before(&text, deadline),
+            None => self.ws.send(&text),
+        };
+        if let Err(error) = result {
+            if deadline.is_some() {
+                self.close();
+            }
+            return Err(error);
+        }
         self.pending.insert(
             id,
             Pending {
@@ -1169,6 +1224,18 @@ pub trait CommandSink {
     fn generation(&self, index: u32) -> u64;
     fn busy(&self, index: u32) -> bool;
     fn send(&mut self, kind: &str, fields: Value, device: Option<u32>) -> Result<u32, String>;
+    fn send_before(
+        &mut self,
+        kind: &str,
+        fields: Value,
+        device: Option<u32>,
+        deadline: f64,
+    ) -> Result<u32, String> {
+        check_output_deadline(deadline)?;
+        let id = self.send(kind, fields, device)?;
+        check_output_deadline(deadline)?;
+        Ok(id)
+    }
 }
 impl CommandSink for Client {
     fn devices(&self) -> &BTreeMap<u32, Value> {
@@ -1182,6 +1249,15 @@ impl CommandSink for Client {
     }
     fn send(&mut self, kind: &str, fields: Value, device: Option<u32>) -> Result<u32, String> {
         self.send(kind, fields, device)
+    }
+    fn send_before(
+        &mut self,
+        kind: &str,
+        fields: Value,
+        device: Option<u32>,
+        deadline: f64,
+    ) -> Result<u32, String> {
+        self.send_bounded(kind, fields, device, 2., Some(deadline))
     }
 }
 #[derive(Clone, Debug)]
@@ -1291,6 +1367,19 @@ impl Outputs {
         now: f64,
         quiet: bool,
     ) -> Result<(), String> {
+        self.update_before(client, strength, settings, now, quiet, None)
+    }
+    /// Positive game output must finish while the heartbeat that authorized it
+    /// is fresh. Stops retain their own transport budget after that deadline.
+    pub fn update_before<C: CommandSink>(
+        &mut self,
+        client: &mut C,
+        strength: f64,
+        settings: &Value,
+        now: f64,
+        quiet: bool,
+        deadline: Option<f64>,
+    ) -> Result<(), String> {
         let removed: BTreeSet<_> = self
             .identity
             .keys()
@@ -1333,7 +1422,21 @@ impl Outputs {
             }
             value = python_round(value.clamp(0., 1.), 3);
             let selection = enabled_channels(&device, &options);
-            let values = self.values(index, &selection, value, holding, quiet && !holding, now);
+            let values = self.values(
+                index,
+                &selection,
+                value,
+                holding,
+                (quiet || options["on"] == false) && !holding,
+                now,
+            );
+            // Slow heat/squeeze release may outlive the motion target. A stroke
+            // waiting for an acknowledgement must not start after motion is zero.
+            if values.get("stroke").is_none_or(|value| *value <= 0.) {
+                if let Some(queue) = self.queues.get_mut(&index) {
+                    queue.retain(|command| command.motion.is_none());
+                }
+            }
             let previous = self.sent.get(&index).cloned();
             let (mut old, last) = match previous {
                 Some((Sent::Values(v), t)) => (v, t),
@@ -1403,7 +1506,12 @@ impl Outputs {
                     break;
                 }
                 let command = self.queues.get_mut(&index).unwrap().pop_front().unwrap();
-                client.send(command.kind, command.fields, Some(index))?;
+                if let Some(deadline) = deadline {
+                    check_output_deadline(deadline)?;
+                    client.send_before(command.kind, command.fields, Some(index), deadline)?;
+                } else {
+                    client.send(command.kind, command.fields, Some(index))?;
+                }
                 self.last_send.insert(index, now);
                 if let Some((up, duration)) = command.motion {
                     self.stroke
@@ -1613,6 +1721,91 @@ mod tests {
         (client, state)
     }
     #[test]
+    fn heartbeat_deadline_rejects_positive_output_but_allows_stop_and_zero() {
+        let (mut client, state) = mock_client();
+        let mut outputs = Outputs::new();
+        let deadline = Some(monotonic() - 1.);
+        assert_eq!(
+            outputs
+                .update_before(&mut client, 0.5, &json!({}), 0., false, deadline)
+                .unwrap_err(),
+            EXPIRED_OUTPUT
+        );
+        assert!(state.lock().unwrap().sent.is_empty());
+        outputs
+            .update_before(&mut client, 0., &json!({}), 0.1, true, deadline)
+            .unwrap();
+        let state = state.lock().unwrap();
+        assert!(state
+            .sent
+            .iter()
+            .any(|command| command.get("StopDeviceCmd").is_some()));
+        assert!(state
+            .sent
+            .iter()
+            .filter_map(|command| command["ScalarCmd"]["Scalars"].as_array())
+            .flatten()
+            .all(|scalar| scalar["Scalar"] == 0.));
+    }
+    #[test]
+    #[cfg(unix)]
+    fn expired_partial_websocket_write_aborts_before_cleanup_can_flush_it() {
+        use std::net::TcpListener;
+        use std::os::fd::AsRawFd;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let socket = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (mut peer, _) = listener.accept().unwrap();
+        peer.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+        let receiver = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(60));
+            let mut bytes = Vec::new();
+            peer.read_to_end(&mut bytes).unwrap();
+            bytes
+        });
+        let size: libc::c_int = 4096;
+        assert_eq!(
+            unsafe {
+                libc::setsockopt(
+                    socket.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_SNDBUF,
+                    (&size as *const libc::c_int).cast(),
+                    std::mem::size_of_val(&size) as libc::socklen_t,
+                )
+            },
+            0
+        );
+        socket.set_nonblocking(true).unwrap();
+        let writer = tungstenite::WebSocket::from_raw_socket(
+            socket.try_clone().unwrap(),
+            Role::Client,
+            Some(
+                WebSocketConfig::default()
+                    .write_buffer_size(0)
+                    .max_write_buffer_size(MAX_BUFFER),
+            ),
+        );
+        let mut ws = WebSocket {
+            socket,
+            writer,
+            buffer: vec![],
+            fragments: vec![],
+            fragmenting: false,
+        };
+        let text = "x".repeat(1024 * 1024);
+        assert!(ws.send_before(&text, monotonic() + 0.02).is_err());
+        ws.close();
+        let received = receiver.join().unwrap();
+        assert!(
+            !received.is_empty(),
+            "fixture must exercise a partial write"
+        );
+        assert!(
+            received.len() < text.len(),
+            "cleanup flushed the expired positive frame"
+        );
+    }
+    #[test]
     fn original_indices_and_all_seven_channels() {
         let device = rich(1);
         let routes = channels(&device);
@@ -1667,6 +1860,137 @@ mod tests {
         let state = state.lock().unwrap();
         assert!(state.closed);
         assert!(state.sent.last().unwrap().get("StopAllDevices").is_some());
+    }
+    fn acknowledge_pending(client: &mut Client) {
+        let replies: Vec<_> = client
+            .pending
+            .keys()
+            .map(|id| json!({"Ok":{"Id":id}}))
+            .collect();
+        if !replies.is_empty() {
+            client.handle(&json!(replies).to_string()).unwrap();
+        }
+    }
+    #[test]
+    fn disabling_a_device_stops_warm_followers_and_explicit_test_still_bypasses_off() {
+        let (mut client, state) = mock_client();
+        let mut outputs = Outputs::new();
+        let settings = json!({"Synthetic fixture":{"outputs":{"vibrate":false,"light":false,"constrict":true,"heat":true}}});
+        for now in [0., 1., 2., 3.] {
+            outputs
+                .update(&mut client, 1., &settings, now, false)
+                .unwrap();
+            acknowledge_pending(&mut client);
+        }
+        assert!(state
+            .lock()
+            .unwrap()
+            .sent
+            .iter()
+            .any(|command| command["ScalarCmd"]["Scalars"]
+                .as_array()
+                .is_some_and(|scalars| scalars
+                    .iter()
+                    .any(|scalar| scalar["Scalar"].as_f64().is_some_and(|value| value > 0.)))));
+        state.lock().unwrap().sent.clear();
+        let mut disabled = settings.clone();
+        disabled["Synthetic fixture"]["on"] = json!(false);
+        outputs
+            .update(&mut client, 1., &disabled, 3.5, false)
+            .unwrap();
+        {
+            let sent = &state.lock().unwrap().sent;
+            assert!(sent
+                .iter()
+                .any(|command| command.get("StopDeviceCmd").is_some()));
+            assert!(!sent.iter().any(|command| command["ScalarCmd"]["Scalars"]
+                .as_array()
+                .is_some_and(|scalars| scalars
+                    .iter()
+                    .any(|scalar| scalar["Scalar"].as_f64().is_some_and(|value| value > 0.)))));
+        }
+        acknowledge_pending(&mut client);
+        state.lock().unwrap().sent.clear();
+        let settings = json!({"Synthetic fixture":{"on":false}});
+        outputs.hold.insert(1, (0.5, 5.));
+        outputs
+            .update(&mut client, 0., &settings, 4., true)
+            .unwrap();
+        acknowledge_pending(&mut client);
+        outputs
+            .update(&mut client, 0., &settings, 4.1, true)
+            .unwrap();
+        assert!(state
+            .lock()
+            .unwrap()
+            .sent
+            .iter()
+            .any(|command| command["ScalarCmd"]["Scalars"]
+                .as_array()
+                .is_some_and(|scalars| scalars.iter().any(|scalar| scalar["Scalar"] == 0.5))));
+        acknowledge_pending(&mut client);
+        state.lock().unwrap().sent.clear();
+        outputs
+            .update(&mut client, 1., &settings, 5.1, false)
+            .unwrap();
+        assert!(state
+            .lock()
+            .unwrap()
+            .sent
+            .iter()
+            .any(|command| command.get("StopDeviceCmd").is_some()));
+    }
+    #[test]
+    fn zero_motion_target_cancels_queued_strokes_while_heat_releases() {
+        for scalar_position in [false, true] {
+            let (mut client, state) = mock_client();
+            let device = if scalar_position {
+                json!({"DeviceIndex":1,"DeviceName":"Synthetic fixture","DeviceMessages":{"ScalarCmd":[
+                    {"ActuatorType":"Temperature","StepCount":20},{"ActuatorType":"Position","StepCount":99}],"StopDeviceCmd":{}}})
+            } else {
+                json!({"DeviceIndex":1,"DeviceName":"Synthetic fixture","DeviceMessages":{"ScalarCmd":[
+                    {"ActuatorType":"Temperature","StepCount":20}],"LinearCmd":[{"StepCount":99}],"StopDeviceCmd":{}}})
+            };
+            client.add(device).unwrap();
+            client
+                .send("ScalarCmd", json!({"DeviceIndex":1,"Scalars":[]}), Some(1))
+                .unwrap();
+            let mut outputs = Outputs::new();
+            let settings = json!({"Synthetic fixture":{"outputs":{"heat":true,"stroke":true}}});
+            outputs
+                .update(&mut client, 0.8, &settings, 0., false)
+                .unwrap();
+            outputs
+                .update(&mut client, 0.8, &settings, 1., false)
+                .unwrap();
+            assert!(outputs.queues[&1]
+                .iter()
+                .any(|command| command.motion.is_some()));
+            acknowledge_pending(&mut client);
+            state.lock().unwrap().sent.clear();
+            outputs
+                .update(&mut client, 0., &settings, 1.1, false)
+                .unwrap();
+            assert!(outputs
+                .queues
+                .get(&1)
+                .is_none_or(|queue| queue.iter().all(|command| command.motion.is_none())));
+            let sent = &state.lock().unwrap().sent;
+            assert!(sent.iter().any(|command| command["ScalarCmd"]["Scalars"]
+                .as_array()
+                .is_some_and(|scalars| scalars
+                    .iter()
+                    .any(|scalar| scalar["ActuatorType"] == "Temperature"
+                        && scalar["Scalar"].as_f64().is_some_and(|value| value > 0.)))));
+            assert!(
+                !sent.iter().any(|command| command.get("LinearCmd").is_some()
+                    || command["ScalarCmd"]["Scalars"]
+                        .as_array()
+                        .is_some_and(|scalars| scalars
+                            .iter()
+                            .any(|scalar| scalar["ActuatorType"] == "Position")))
+            );
+        }
     }
     #[test]
     fn unanswered_outputs_close_and_final_stop_write_failure_does_not_recurse() {

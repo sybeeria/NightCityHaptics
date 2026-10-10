@@ -30,13 +30,6 @@ run Intiface Central on its default port (12345), the app uses that instead.
 4. Play. Game-driven feedback runs only during live gameplay. Menus, pause, loading screens,
    photo mode and the CET overlay suspend it.
 
-To upgrade from 0.2.0–0.2.3, close the game and quit the companion, then extract 0.2.4 over the
-existing installation. Keep `companion/settings.json`: your valid saved settings are preserved,
-and new interactions receive their defaults. No new dependencies or engine download are needed.
-If Romance scenes still uses **Slow build (2 min)**, choose **Follow the scene** to use the new
-scene timings. Upgrading keeps your old feel selection; **Reset interactions** restores the new
-defaults, including Follow the scene.
-
 ## Using it
 
 - **Interactions:** grouped and collapsible. Switch each one on or off (or a whole group), pick a

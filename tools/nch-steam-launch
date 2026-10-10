@@ -56,8 +56,15 @@ def environments(source):
     return game, companion
 
 
+class LocalPingOnly(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, file, code, message, headers, url):
+        # App detection is strictly localhost; a foreign listener must not send
+        # launch-time probes to a different host or endpoint.
+        return None
+
+
 def already_running(port, timeout=0.2):
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), LocalPingOnly())
     try:
         with opener.open("http://127.0.0.1:{}/api/ping".format(port), timeout=timeout) as response:
             payload = response.read(65537)

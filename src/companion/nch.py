@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import logging
+import math
 import os
 from pathlib import Path
 import platform
@@ -26,6 +28,7 @@ import tempfile
 import threading
 import time
 import urllib.request
+from urllib.parse import urlsplit
 import webbrowser
 import zipfile
 
@@ -62,10 +65,12 @@ def data_dir():
 
 def read_json(path):
     try:
-        if path.stat().st_size > 1024 * 1024:
+        with path.open("rb") as stream:
+            data = stream.read(1024 * 1024 + 1)
+        if len(data) > 1024 * 1024:
             return None
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError, UnicodeError):
+        return json.loads(data)
+    except (OSError, ValueError, UnicodeError, RecursionError):
         return None
 
 
@@ -87,6 +92,7 @@ class Engine:
         self.process = None
         self.log = None
         self.download_state = ""
+        self.download_lock = threading.Lock()
 
     def platform_key(self):
         machine = platform.machine().lower()
@@ -112,46 +118,91 @@ class Engine:
 
     def start(self, port):
         path = self.executable()
-        if not path or self.running():
+        if not path or self.running() or self.download_lock.locked():
             return False
         arguments = [str(path), "--websocket-port", str(port), "--server-name", "Night City Haptics",
                      "--max-ping-time", "3000",
                      "--use-bluetooth-le", "--use-serial", "--use-lovense-dongle-hid",
                      "--use-lovense-dongle-serial", "--log", "info"]
+        data_dir().mkdir(parents=True, exist_ok=True)
+        if self.log:
+            self.log.close()
         self.log = open(data_dir() / "intiface-engine.log", "ab")
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
-        self.process = subprocess.Popen(arguments, stdout=self.log, stderr=subprocess.STDOUT,
-                                        stdin=subprocess.DEVNULL, creationflags=flags)
+        try:
+            self.process = subprocess.Popen(arguments, stdout=self.log, stderr=subprocess.STDOUT,
+                                            stdin=subprocess.DEVNULL, creationflags=flags)
+        except OSError:
+            self.log.close()
+            self.log = None
+            self.process = None
+            raise
         logging.info("Started Intiface Engine: %s", path)
         return True
 
     def stop(self):
-        if self.running():
-            self.process.terminate()
-            try:
-                self.process.wait(3)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-        self.process = None
-        if self.log:
-            self.log.close()
-            self.log = None
+        process, self.process = self.process, None
+        try:
+            if process is not None and process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(3)
+        except (OSError, subprocess.TimeoutExpired):
+            logging.warning("Could not finish stopping the owned Intiface Engine")
+        finally:
+            if self.log:
+                self.log.close()
+                self.log = None
 
     def download(self):
         """Fetch the official release for this platform and check its SHA-256."""
-        key = self.platform_key()
-        if key not in ENGINE_DOWNLOADS:
-            self.download_state = f"No Intiface Engine build for {key}; install Intiface Central instead"
-            return
-        name, digest = ENGINE_DOWNLOADS[key]
-        target = data_dir() / f"intiface-engine-{ENGINE_RELEASE}"
+        if not self.download_lock.acquire(blocking=False):
+            return False
+        self._download()
+        return True
+
+    def request_download(self):
+        # Claim the download before starting its worker. A fast completion must
+        # never be overwritten by the HTTP handler's initial status message.
+        if not self.download_lock.acquire(blocking=False):
+            return False
+        self.download_state = "Downloading Intiface Engine…"
         try:
+            threading.Thread(target=self._download, daemon=True).start()
+        except BaseException:
+            self.download_lock.release()
+            self.download_state = "Download could not start"
+            raise
+        return True
+
+    def _download(self):
+        try:
+            key = self.platform_key()
+            if self.running():
+                raise ValueError("Stop the running Intiface Engine before replacing it")
+            if key not in ENGINE_DOWNLOADS:
+                self.download_state = f"No Intiface Engine build for {key}; install Intiface Central instead"
+                return
+            name, digest = ENGINE_DOWNLOADS[key]
+            target = data_dir() / f"intiface-engine-{ENGINE_RELEASE}"
             self.download_state = "Downloading Intiface Engine…"
             target.parent.mkdir(parents=True, exist_ok=True)
             with tempfile.TemporaryDirectory(dir=target.parent) as temporary:
                 archive = Path(temporary) / name
                 with urllib.request.urlopen(ENGINE_URL.format(ENGINE_RELEASE, name), timeout=60) as response:
-                    archive.write_bytes(response.read())
+                    size = 0
+                    with archive.open("wb") as output:
+                        while True:
+                            chunk = response.read(65536)
+                            if not chunk:
+                                break
+                            size += len(chunk)
+                            if size > 64 * 1024 * 1024:
+                                raise ValueError("engine download is too large")
+                            output.write(chunk)
                 if hashlib.sha256(archive.read_bytes()).hexdigest() != digest:
                     raise ValueError("download failed its checksum")
                 unpacked = Path(temporary) / "engine"
@@ -164,14 +215,25 @@ class Engine:
                                and p.suffix in ("", ".exe")), None)
                 if binary is None:
                     raise ValueError("the download did not contain intiface-engine")
+                binary.chmod(binary.stat().st_mode | stat.S_IXUSR)
+                previous = Path(temporary) / "previous"
                 if target.exists():
-                    shutil.rmtree(target)
-                shutil.move(str(binary.parent), str(target))
-                engine = target / binary.name
-                engine.chmod(engine.stat().st_mode | stat.S_IXUSR)
+                    target.replace(previous)
+                try:
+                    shutil.move(str(binary.parent), str(target))
+                except BaseException:
+                    if target.is_dir():
+                        shutil.rmtree(target)
+                    elif target.exists():
+                        target.unlink()
+                    if previous.exists():
+                        previous.replace(target)
+                    raise
             self.download_state = ""
         except Exception as exc:  # shown in the page
             self.download_state = f"Download failed: {exc}"
+        finally:
+            self.download_lock.release()
 
 
 class App:
@@ -206,6 +268,37 @@ class App:
         with self.lock:
             if not isinstance(changes, dict):
                 raise ValueError("Settings must be an object")
+            def validate(options, allowed):
+                for key, value in options.items():
+                    if key not in allowed:
+                        raise ValueError("Unknown setting: " + key)
+                    if key in ("enabled", "start_intiface", "on", "all_motors") and type(value) is not bool:
+                        raise ValueError(key + " must be true or false")
+                    if key in ("max_strength", "strength"):
+                        try:
+                            valid = type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1
+                        except OverflowError:
+                            valid = False
+                        if not valid:
+                            raise ValueError(key + " must be a finite number between 0 and 1")
+            validate(changes, {"enabled", "start_intiface", "max_strength", "intiface_address", "interactions", "devices"})
+            if "intiface_address" in changes:
+                address = changes["intiface_address"]
+                if not isinstance(address, str) or not address.startswith("ws://") or len(address) >= 200 or any(ord(c) < 33 or ord(c) == 127 for c in address):
+                    raise ValueError("Invalid Intiface address")
+                parts = urlsplit(address)
+                if (parts.scheme != "ws" or not parts.hostname or parts.username is not None
+                        or parts.password is not None or parts.fragment or parts.port == 0):
+                    raise ValueError("Invalid Intiface address")
+                path = (parts.path or "/") + ("?" + parts.query if parts.query else "")
+                if any(ord(c) > 126 for c in path):
+                    raise ValueError("Invalid Intiface path")
+                try:
+                    hostname = parts.hostname.encode("idna").decode("ascii")
+                except UnicodeError as exc:
+                    raise ValueError("Invalid Intiface host") from exc
+                if any(ord(c) < 33 or ord(c) > 126 for c in hostname):
+                    raise ValueError("Invalid Intiface host")
             merged = json.loads(json.dumps(self.settings))
             for key, value in changes.items():
                 if key in ("interactions", "devices"):
@@ -214,6 +307,14 @@ class App:
                     for name, options in value.items():
                         if not isinstance(name, str) or not isinstance(options, dict):
                             raise ValueError(key + " entries must be named objects")
+                        validate(options, {"on", "strength", "feel"} if key == "interactions" else {"on", "strength", "all_motors"})
+                        if key == "interactions":
+                            item = next((item for item in self.catalog["interactions"] if item["id"] == name), None)
+                            if item is None:
+                                raise ValueError("Unknown interaction: " + name)
+                            if "feel" in options and (not isinstance(options["feel"], str)
+                                    or options["feel"] not in haptics.feel_ids(self.catalog, item)):
+                                raise ValueError("Invalid feel for " + name)
                         merged[key].setdefault(name, {}).update(options)
                 else:
                     merged[key] = value
@@ -224,6 +325,8 @@ class App:
             self.settings = settings
             if address_changed:
                 self.disconnect("Address changed")
+                self.engine.stop()  # only the engine process this app owns
+                self.started_engine_at = None
                 self.next_connect = 0.
 
     def reset(self):
@@ -236,9 +339,17 @@ class App:
     # Intiface connection --------------------------------------------------------
     def port(self):
         try:
-            return int(self.settings["intiface_address"].rsplit(":", 1)[1].split("/")[0])
-        except (ValueError, IndexError):
+            return urlsplit(self.settings["intiface_address"]).port or 80
+        except ValueError:
             return 12345
+
+    def local_engine_address(self):
+        try:
+            address = urlsplit(self.settings["intiface_address"])
+            return (address.scheme == "ws" and address.hostname in ("127.0.0.1", "localhost")
+                    and not address.username and not address.password)
+        except ValueError:
+            return False
 
     def disconnect(self, reason):
         if self.client:
@@ -269,16 +380,17 @@ class App:
             self.next_connect = now + 2
             if self.engine.running():
                 self.link, self.link_detail = "starting", "Starting Intiface Engine…"
-                if self.started_engine_at and now - self.started_engine_at > 20:
+                if self.started_engine_at is not None and now - self.started_engine_at > 20:
                     self.link, self.link_detail = "error", "Intiface Engine did not start; see intiface-engine.log"
-            elif self.settings["start_intiface"] and self.engine.executable() and not self.engine.download_state:
+            elif (self.settings["start_intiface"] and self.local_engine_address()
+                  and self.engine.executable() and not self.engine.download_lock.locked()):
                 if self.engine.start(self.port()):
                     self.started_engine_at = now
                     self.link, self.link_detail = "starting", "Starting Intiface Engine…"
                     self.next_connect = now + .7
             elif self.engine.download_state.startswith("Downloading"):
                 self.link, self.link_detail = "starting", self.engine.download_state
-            elif self.settings["start_intiface"] and not self.engine.executable():
+            elif self.settings["start_intiface"] and self.local_engine_address() and not self.engine.executable():
                 self.link, self.link_detail = "missing", self.engine.download_state or "Intiface Engine is not installed yet"
             else:
                 self.link, self.link_detail = "error", f"No Intiface server at {self.settings['intiface_address']} ({exc})"
@@ -316,8 +428,8 @@ class App:
                 self.sync_scene(now)
             output, _ = self.mixer.tick(now, self.game.levels(now), self.settings)
             self.output = output
-            self.history.append(round(output, 3))
-            del self.history[:-300]
+            self.history.append((now, round(output, 3)))
+            self.history = [(stamp, value) for stamp, value in self.history[-300:] if now - stamp <= 5]
             if self.client:
                 try:
                     self.client.poll()
@@ -396,6 +508,15 @@ class App:
         except OSError:
             pass
 
+    def output_history(self, now):
+        # Keep the graph's five-second window accurate at both idle and live rates.
+        values = [0.] * 150
+        for stamp, value in self.history:
+            if 0 <= now - stamp < 5:
+                index = min(149, int((stamp - (now - 5)) * 30))
+                values[index] = max(values[index], value)
+        return values
+
     def snapshot(self):
         now = time.monotonic()
         with self.lock:
@@ -407,7 +528,7 @@ class App:
                                         **buttplug.device_options(device, self.settings["devices"]))
                 devices.append(info)
             return {"version": VERSION, "settings": self.settings, "output": self.output,
-                    "contributions": dict(self.mixer.contributions), "history": self.history[-150:],
+                    "contributions": dict(self.mixer.contributions), "history": self.output_history(now),
                     "link": self.link, "link_detail": self.link_detail,
                     "scanning": bool(self.client and self.client.scanning), "devices": devices,
                     "device_errors": (self.device_errors + (list(self.client.errors) if self.client else []))[-5:],
@@ -478,6 +599,10 @@ def make_server(app, port):
         # thread per poll cost more than the answer itself.
         protocol_version = "HTTP/1.1"
 
+        def setup(self):
+            super().setup()
+            self.connection.settimeout(5)
+
         def log_message(self, *_):
             pass
 
@@ -514,22 +639,33 @@ def make_server(app, port):
             self.reply(404, {"error": "Not found"})
 
         def do_POST(self):
-            # Read the body first, even for a rejected request, so a kept-alive
-            # connection never parses leftover body bytes as the next request.
+            # Reject ambiguous or oversized framing before dispatching an action.
+            # Close rejected connections so no unread bytes become a new request.
+            lengths = self.headers.get_all("Content-Length", [])
+            if self.headers.get("Transfer-Encoding") or len(lengths) != 1 or not lengths[0].isascii() or not lengths[0].isdecimal():
+                self.close_connection = True
+                return self.reply(400, {"error": "A valid Content-Length is required"})
             try:
-                length = max(0, int(self.headers.get("Content-Length", "0")))
+                length = int(lengths[0])
             except ValueError:
-                length = 0
-            data = self.rfile.read(min(length, 262144))
+                self.close_connection = True
+                return self.reply(400, {"error": "Invalid Content-Length"})
             if length > 262144:
                 self.close_connection = True
+                return self.reply(413, {"error": "Request body is too large"})
+            data = self.rfile.read(length)
+            if len(data) != length:
+                self.close_connection = True
+                return self.reply(400, {"error": "Incomplete request body"})
             if not self.local() or self.headers.get("X-NCH") != "1":
                 return self.reply(403, {"error": "Rejected"})
             try:
                 body = json.loads(data or b"{}")
                 if not isinstance(body, dict):
                     raise ValueError("Request body must be an object")
-                action = self.path.rsplit("/", 1)[-1]
+                if not self.path.startswith("/api/") or self.path.count("/") != 2:
+                    return self.reply(404, {"error": "Unknown action"})
+                action = self.path[5:]
                 if action == "settings":
                     app.save(body)
                 elif action == "reset":
@@ -542,8 +678,8 @@ def make_server(app, port):
                     with app.lock:
                         app.scan()
                 elif action == "download-engine":
-                    threading.Thread(target=app.engine.download, daemon=True).start()
-                    app.engine.download_state = "Downloading Intiface Engine…"
+                    with app.lock:
+                        app.engine.request_download()
                 elif action == "reconnect":
                     with app.lock:
                         app.disconnect("Reconnecting")
@@ -553,7 +689,7 @@ def make_server(app, port):
                 else:
                     return self.reply(404, {"error": "Unknown action"})
                 self.reply(200, {"ok": True})
-            except (ValueError, TypeError, OSError) as exc:
+            except (ValueError, TypeError, OSError, RecursionError) as exc:
                 self.reply(400, {"error": str(exc)})
 
     return ThreadingHTTPServer(("127.0.0.1", port), Handler)
@@ -563,8 +699,12 @@ def already_running(port):
     try:
         local = urllib.request.build_opener(urllib.request.ProxyHandler({}))  # never via a proxy
         with local.open(f"http://127.0.0.1:{port}/api/ping", timeout=1) as response:
-            return json.load(response).get("app") == "night-city-haptics"
-    except (OSError, ValueError):
+            payload = response.read(65537)
+        if len(payload) > 65536:
+            return False
+        reply = json.loads(payload)
+        return isinstance(reply, dict) and reply.get("app") == "night-city-haptics"
+    except (OSError, ValueError, RecursionError, http.client.HTTPException):
         return False
 
 
@@ -575,6 +715,8 @@ def main():
     parser.add_argument("--no-browser", action="store_true", help="don't open the control page")
     parser.add_argument("--settings", type=Path, help="settings file (default: settings.json next to nch.py)")
     args = parser.parse_args()
+    if not 1 <= args.port <= 65535:
+        parser.error("port must be between 1 and 65535")
     data_dir().mkdir(parents=True, exist_ok=True)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s", handlers=[
         logging.StreamHandler(), logging.FileHandler(data_dir() / "companion.log", encoding="utf-8")])

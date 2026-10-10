@@ -39,7 +39,7 @@ local function attempt(name, callback, ...)
   return nil, false
 end
 local function clamp(value)
-  if type(value) ~= "number" or value ~= value then return 0 end
+  if type(value) ~= "number" or value ~= value or value == math.huge or value == -math.huge then return 0 end
   return math.max(0, math.min(1, value))
 end
 local function finite(value)
@@ -80,10 +80,17 @@ local function writeState()
   R.seq = R.seq + 1
   local raw, ok = attempt("encode", encodeState)
   if not ok then return end
-  local file = io.open("state.json", "w")
-  if not file then R.errors["state.json"] = "cannot write"; return end
-  file:write(raw); file:close()
+  local file
+  local _, written = attempt("state.json", function()
+    file = assert(io.open("state.json", "w"), "cannot open telemetry")
+    assert(file:write(raw), "cannot write telemetry")
+    assert(file:close(), "cannot close telemetry")
+    file = nil
+  end)
+  if file then pcall(file.close, file) end
+  if not written then return false end
   R.dirty, R.writeClock = false, 0
+  return true
 end
 local function newSession(reason)
   R.session = tostring(os.time()) .. "-" .. string.format("%.6f", os.clock()) .. "-" .. tostring({}):gsub("[^%w]", "")
@@ -173,6 +180,9 @@ local function explosionAt(position)
   local player = Game.GetPlayer()
   if not R.active or not player or not position then return end
   local origin = player:GetWorldPosition()
+  for _, axis in ipairs({"x", "y", "z"}) do
+    if not finite(position[axis]) or not finite(origin[axis]) then return end
+  end
   local dx, dy, dz = position.x - origin.x, position.y - origin.y, position.z - origin.z
   local strength = 1 - math.sqrt(dx * dx + dy * dy + dz * dz) / 30
   if strength <= 0 then return end
@@ -297,7 +307,11 @@ local function registerHooks()
   -- Undress/Dress also run for every apartment shower, so they only count for an armed or playing scene.
   hook("InvisibleSceneStash", "OnQuestUndressPlayer", function() anchorReached("undress") end)
   hook("InvisibleSceneStash", "OnQuestDressPlayer", function()
-    if R.scene.playing or R.scene.pending then R.scene = {}; R.dirty = true; event("romance:end") end
+    if R.scene.playing or R.scene.pending or R.scene.armed then
+      local playing = R.scene.playing or R.scene.pending
+      R.scene = {}; R.dirty = true
+      if playing then event("romance:end") end
+    end
   end)
   -- Panam's neural-link overlay: each flash is a pulse, "synchronizing" is the peak.
   hook("GameObject", "OnCustomUIAnimationEvent", function(self, e)
@@ -392,7 +406,9 @@ local function sample(player)
   probe("vehicle", function()
     levels.engine, levels.drift = 0, 0
     if not psm:GetBool(P.MountedToVehicle) then R.seen.gear = nil; return end
-    local speed = math.abs(VehicleComponent.GetOwnerVehicleSpeed(player:GetGame(), player))
+    local speed = VehicleComponent.GetOwnerVehicleSpeed(player:GetGame(), player)
+    if not finite(speed) then return end
+    speed = math.abs(speed)
     levels.engine = .15 + .85 * math.min(1, speed / 40)
     local mount = Game.GetMountingFacility():GetMountingInfoSingleWithIds(id)
     local vehicle = Game.FindEntityByID(mount.parentId)
@@ -400,7 +416,8 @@ local function sample(player)
     if not board then return end
     if speed > 2 then
       local handbrake = board:GetInt(defs.Vehicle.IsHandbraking) ~= 0 and .6 or 0
-      levels.drift = math.max(handbrake, math.min(1, math.abs(board:GetFloat(defs.Vehicle.MeanSlipRatio)) / .5))
+      local slip = board:GetFloat(defs.Vehicle.MeanSlipRatio)
+      levels.drift = math.max(handbrake, finite(slip) and math.min(1, math.abs(slip) / .5) or 0)
     end
     if changed("gear", board:GetInt(defs.Vehicle.GearValue)) then event("gearShift") end
   end)
@@ -479,17 +496,33 @@ end
 
 -- CET events -------------------------------------------------------------------
 local function readStatus()
-  local file = io.open("status.json", "r")
-  if not file then return end
-  local raw = file:read("*a"); file:close()
-  -- The companion changes its heartbeat on each rewrite, even while idle. A
-  -- truly identical file is stale; merely reading it cannot prove app liveness.
-  if raw == R.statusRaw then return end
-  local ok, decoded = pcall(json.decode, raw)
-  if ok and type(decoded) == "table" and (decoded.heartbeat == nil or
-      (finite(decoded.heartbeat) and decoded.heartbeat >= 0 and decoded.heartbeat % 1 == 0)) then
-    R.companion, R.statusRaw, R.statusClock = decoded, raw, R.clock
+  local file
+  local raw, read = attempt("status.json", function()
+    file = io.open("status.json", "r")
+    if not file then return nil end
+    local content = file:read(65537)
+    assert(file:close(), "cannot close status")
+    file = nil
+    assert(type(content) == "string" and #content <= 65536, "invalid status file")
+    return content
+  end)
+  if file then pcall(file.close, file) end
+  if not read or raw == nil or raw == R.statusRaw then return end
+  -- Only a new, valid snapshot refreshes liveness. Validate display fields before
+  -- handing them to ImGui, including data from interrupted or incompatible apps.
+  local decoded, ok = attempt("status decode", json.decode, raw)
+  if not ok or type(decoded) ~= "table" or type(decoded.running) ~= "boolean" then return end
+  if decoded.heartbeat ~= nil and (not finite(decoded.heartbeat) or decoded.heartbeat < 0 or decoded.heartbeat % 1 ~= 0) then return end
+  if decoded.output ~= nil and not finite(decoded.output) then return end
+  local devices = decoded.devices or {}
+  if type(devices) ~= "table" or #devices > 64 then return end
+  local names = {}
+  for _, name in ipairs(devices) do
+    if type(name) ~= "string" or #name > 256 then return end
+    names[#names + 1] = name
   end
+  decoded.devices, decoded.output = names, clamp(decoded.output or 0)
+  R.companion, R.statusRaw, R.statusClock = decoded, raw, R.clock
 end
 local function companionUp()
   return R.statusClock ~= nil and R.clock - R.statusClock < 3 and R.companion.running == true
@@ -586,7 +619,8 @@ registerHotkey("nchTest", "Test buzz", testBuzz)
 
 -- For other CET mods: GetMod("nightCityHaptics").Pulse(strength 0-1, seconds?)
 mod.Pulse = function(strength, seconds)
-  if seconds ~= nil and not finite(seconds) then return false end
+  if not finite(strength) or strength <= 0 then return false end
+  if seconds ~= nil and (not finite(seconds) or seconds <= 0) then return false end
   return event("external", strength, type(seconds) == "number" and math.max(.05, math.min(600, seconds)) or nil)
 end
 mod.IsActive = function() return R.active and not R.paused end

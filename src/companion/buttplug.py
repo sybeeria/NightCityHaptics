@@ -23,6 +23,34 @@ RECV_BYTES = 256 * 1024
 RECV_FRAMES = 64
 RECV_WORK = .01
 OUTPUT_COMMANDS = {"ScalarCmd", "RotateCmd", "LinearCmd", "StopDeviceCmd", "StopAllDevices"}
+MAX_PROTOCOL_ID = 2 ** 32 - 1
+MAX_PENDING = 512
+REPLY_KINDS = {"RequestServerInfo": "ServerInfo", "RequestDeviceList": "DeviceList",
+               **{kind: "Ok" for kind in OUTPUT_COMMANDS | {"Ping", "StartScanning", "StopScanning"}}}
+
+
+def protocol_uint(value):
+    return type(value) is int and 0 <= value <= MAX_PROTOCOL_ID
+
+
+def protocol_float(text):
+    value = float(text)
+    if not math.isfinite(value):
+        raise ValueError("Nonfinite Intiface number")
+    return value
+
+
+def protocol_object(items):
+    result = {}
+    for key, value in items:
+        if key in result:
+            raise ValueError("Duplicate Intiface JSON field")
+        result[key] = value
+    return result
+
+
+def protocol_constant(text):
+    raise ValueError("Invalid Intiface JSON number")
 
 
 def protocol_integer(text):
@@ -39,20 +67,28 @@ class ConnectionClosed(Exception):
 
 class WebSocket:
     def __init__(self, url, timeout=2.):
+        if not isinstance(url, str) or any(ord(c) < 32 or ord(c) == 127 for c in url):
+            raise ValueError("Invalid WebSocket address")
         parts = urlsplit(url)
-        if parts.scheme != "ws" or not parts.hostname:
+        if (parts.scheme != "ws" or not parts.hostname or parts.username is not None
+                or parts.password is not None or parts.fragment):
             raise ValueError("Intiface address must look like ws://127.0.0.1:12345")
-        port = parts.port or 80
+        port = parts.port if parts.port is not None else 80
+        if port < 1 or not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("Invalid WebSocket port or timeout")
+        path = parts.path or "/"
+        if parts.query:
+            path += "?" + parts.query
+        if any(ord(c) < 33 or ord(c) > 126 for c in path):
+            raise ValueError("Invalid WebSocket path")
+        hostname = parts.hostname.encode("idna").decode("ascii")
+        if any(ord(c) < 33 or ord(c) > 126 for c in hostname):
+            raise ValueError("Invalid WebSocket host")
+        host = f"[{hostname}]" if ":" in hostname else hostname
         deadline = time.monotonic() + timeout
-        self.sock = socket.create_connection((parts.hostname, port), timeout=timeout)
+        self.sock = socket.create_connection((hostname, port), timeout=timeout)
         try:
             key = base64.b64encode(os.urandom(16)).decode()
-            path = parts.path or "/"
-            if parts.query:
-                path += "?" + parts.query
-            if any(ord(c) < 33 or ord(c) > 126 for c in path):
-                raise ValueError("Invalid WebSocket path")
-            host = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
             request = (f"GET {path} HTTP/1.1\r\nHost: {host}:{port}\r\nUpgrade: websocket\r\n"
                        f"Connection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n")
             self._handshake_timeout(deadline)
@@ -69,14 +105,23 @@ class WebSocket:
             self._handshake_timeout(deadline)
             head, self.buffer = response.split(b"\r\n\r\n", 1)
             lines = head.decode("latin-1").split("\r\n")
-            if " 101 " not in lines[0] + " ":
+            status = lines[0].split(" ", 2)
+            if len(status) < 2 or status[:2] != ["HTTP/1.1", "101"]:
                 raise ConnectionClosed(f"Not a WebSocket server: {lines[0]}")
             accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest()).decode()
-            headers = {line.split(":", 1)[0].strip().lower(): line.split(":", 1)[1].strip() for line in lines[1:] if ":" in line}
+            headers = {}
+            for line in lines[1:]:
+                name, colon, value = line.partition(":")
+                if not colon or not name or any(not (c.isascii() and (c.isalnum() or c == "-")) for c in name):
+                    raise ConnectionClosed("Invalid WebSocket response header")
+                name, value = name.lower(), value.strip()
+                if name in headers and name in ("sec-websocket-accept", "sec-websocket-protocol", "sec-websocket-extensions", "upgrade"):
+                    raise ConnectionClosed("Duplicate WebSocket response header")
+                headers[name] = headers[name] + "," + value if name in headers else value
             if (headers.get("sec-websocket-accept") != accept
                     or headers.get("upgrade", "").lower() != "websocket"
                     or "upgrade" not in {v.strip().lower() for v in headers.get("connection", "").split(",")}
-                    or headers.get("sec-websocket-extensions")):
+                    or headers.get("sec-websocket-extensions") or headers.get("sec-websocket-protocol")):
                 raise ConnectionClosed("WebSocket handshake failed")
             self.sock.setblocking(False)
             self.fragments = bytearray()
@@ -229,30 +274,39 @@ class Client:
         self.pending_kind = {}
         self.devices = {}   # index -> device dict
         self.scanning = False
+        self.scan_id = None
+        self.closed = False
         self.errors = []
         self.ping_every = 0.
         self.next_ping = float("inf")
         try:
             info = self.request("RequestServerInfo", {"ClientName": name, "MessageVersion": 3})
-            if info[0] != "ServerInfo" or info[1].get("MessageVersion") != 3:
+            if info[0] != "ServerInfo" or type(info[1].get("MessageVersion")) is not int or info[1]["MessageVersion"] != 3:
                 raise ConnectionClosed("Intiface did not accept Buttplug message version 3")
-            self.server_name = str(info[1].get("ServerName", "Intiface"))
+            name = info[1].get("ServerName")
             max_ping = info[1].get("MaxPingTime", 0)
-            if isinstance(max_ping, int) and max_ping > 0:
+            if (name is not None and (not isinstance(name, str) or len(name) > 256)) or not protocol_uint(max_ping):
+                raise ConnectionClosed("Invalid Intiface server information")
+            self.server_name = name or "Intiface"
+            if max_ping > 0:
                 self.ping_every = max_ping / 1000 / 2
                 self.next_ping = time.monotonic() + self.ping_every
             kind, data = self.request("RequestDeviceList", {})
             if kind != "DeviceList" or not isinstance(data.get("Devices"), list) or len(data["Devices"]) > 128:
                 raise ConnectionClosed("Invalid Intiface device list")
+            listed = set()
             for device in data.get("Devices", []):
                 self._add(device)
+                if device["DeviceIndex"] in listed:
+                    self._fail("Duplicate Intiface device index")
+                listed.add(device["DeviceIndex"])
         except Exception:
             self.ws.close()
             raise
 
     def _add(self, device):
-        if (not isinstance(device, dict) or type(device.get("DeviceIndex")) is not int
-                or device["DeviceIndex"] < 0 or not isinstance(device.get("DeviceName"), str)
+        if (not isinstance(device, dict) or not protocol_uint(device.get("DeviceIndex"))
+                or not isinstance(device.get("DeviceName"), str)
                 or len(device["DeviceName"]) > 256 or not isinstance(device.get("DeviceMessages"), dict)):
             self._fail("Invalid Intiface device")
         display = device.get("DeviceDisplayName")
@@ -262,8 +316,14 @@ class Client:
             attrs = device["DeviceMessages"].get(command, [])
             if not isinstance(attrs, list) or len(attrs) > 64 or any(not isinstance(a, dict) for a in attrs):
                 self._fail("Invalid Intiface device capabilities")
+            for attr in attrs:
+                if (("StepCount" in attr and not protocol_uint(attr["StepCount"]))
+                        or (command == "ScalarCmd" and "ActuatorType" not in attr)
+                        or ("ActuatorType" in attr and (not isinstance(attr["ActuatorType"], str)
+                            or len(attr["ActuatorType"]) > 64))):
+                    self._fail("Invalid Intiface actuator attributes")
         gap = device.get("DeviceMessageTimingGap", 0)
-        if type(gap) is not int or gap < 0:
+        if not protocol_uint(gap):
             self._fail("Invalid Intiface device timing gap")
         if device["DeviceIndex"] not in self.devices and len(self.devices) >= 128:
             self._fail("Too many Intiface devices")
@@ -272,29 +332,42 @@ class Client:
     def _fail(self, message):
         # A rejected/unanswered output cannot be treated as an accepted stop.
         # Connection cleanup also invokes the server's client-disconnect stop path.
-        try:
-            self.stop_all()
-        except Exception:
-            pass
-        finally:
-            self.close()
+        if not self.closed:
+            # Reserve room for the final stop even after a command flood.
+            self.pending.clear()
+            self.pending_kind.clear()
+            try:
+                self.stop_all()
+            except Exception:
+                pass
+            finally:
+                self.close()
         raise ConnectionClosed(message)
 
-    def send(self, kind, fields, device=None):
-        self.next_id = self.next_id % 4294967294 + 1
+    def send(self, kind, fields, device=None, timeout=2.):
+        if self.closed:
+            raise ConnectionClosed("Intiface connection is closed")
+        if len(self.pending) >= MAX_PENDING:
+            self._fail("Too many pending Intiface commands")
+        # Wrapping IDs must not overwrite an outstanding response match.
+        for _ in range(len(self.pending) + 1):
+            self.next_id = self.next_id % MAX_PROTOCOL_ID + 1
+            if self.next_id not in self.pending:
+                break
         ident = self.next_id
-        self.ws.send(json.dumps([{kind: dict(fields, Id=ident)}]))
-        self.pending[ident] = (time.monotonic() + 2., device)
+        self.ws.send(json.dumps([{kind: dict(fields, Id=ident)}], allow_nan=False))
+        self.pending[ident] = (time.monotonic() + timeout, device)
         self.pending_kind[ident] = kind
         return ident
 
     def _handle(self, text):
         replies = {}
         try:
-            batch = json.loads(text, parse_int=protocol_integer)
+            batch = json.loads(text, parse_int=protocol_integer, parse_float=protocol_float,
+                               parse_constant=protocol_constant, object_pairs_hook=protocol_object)
         except (ValueError, RecursionError):
             self._fail("Invalid Intiface JSON")
-        if not isinstance(batch, list) or len(batch) > 128:
+        if not isinstance(batch, list) or not batch or len(batch) > 128:
             self._fail("Invalid Intiface message batch")
         for message in batch:
             if not isinstance(message, dict) or len(message) != 1:
@@ -302,48 +375,73 @@ class Client:
             kind, data = next(iter(message.items()))
             if not isinstance(data, dict):
                 self._fail("Invalid Intiface message fields")
+            ident = data.get("Id")
+            if not protocol_uint(ident):
+                self._fail("Invalid Intiface message id")
+            if kind in ("DeviceAdded", "DeviceRemoved", "ScanningFinished") and ident != 0:
+                self._fail("Invalid Intiface system message id")
             if kind == "DeviceAdded":
                 self._add(data)
             elif kind == "DeviceRemoved":
                 index = data.get("DeviceIndex")
-                if type(index) is not int:
+                if not protocol_uint(index):
                     self._fail("Invalid Intiface device index")
                 self.devices.pop(index, None)
-                for ident, (_, pending_device) in list(self.pending.items()):
+                for pending_id, (_, pending_device) in list(self.pending.items()):
                     if pending_device == index:
-                        self.pending.pop(ident)
-                        self.pending_kind.pop(ident, None)
+                        self.pending.pop(pending_id)
+                        self.pending_kind.pop(pending_id, None)
             elif kind == "ScanningFinished":
                 self.scanning = False
             elif kind == "Error":
-                self.errors.append(str(data.get("ErrorMessage", "Intiface error"))[:200])
+                if not isinstance(data.get("ErrorMessage"), str) or not protocol_uint(data.get("ErrorCode")):
+                    self._fail("Invalid Intiface error")
+                error = data["ErrorMessage"][:200]
+                self.errors.append(error)
                 del self.errors[:-5]
-            ident = data.get("Id")
-            if type(ident) is not int:
-                self._fail("Invalid Intiface message id")
+                if ident == 0 or data["ErrorCode"] in (1, 2):
+                    self._fail(error)
             if ident in self.pending:
                 command = self.pending_kind.pop(ident, None)
                 del self.pending[ident]
-                if kind == "Error" and (command in OUTPUT_COMMANDS or command == "Ping"):
-                    self._fail(str(data.get("ErrorMessage", "Intiface command failed"))[:200])
-                if command in OUTPUT_COMMANDS and kind != "Ok":
-                    self._fail("Intiface did not acknowledge output")
+                if kind == "Error":
+                    if command == "StartScanning" and ident == self.scan_id:
+                        self.scanning = False
+                    if command in OUTPUT_COMMANDS or command in ("Ping", "StopScanning"):
+                        self._fail(data["ErrorMessage"][:200])
+                else:
+                    expected = REPLY_KINDS.get(command)
+                    if expected and kind != expected:
+                        self._fail("Intiface did not acknowledge output" if command in OUTPUT_COMMANDS
+                                   else f"Invalid Intiface reply to {command}")
                 replies[ident] = (kind, data)
         return replies
 
+    def _maintain(self, now):
+        for ident, (deadline, _) in list(self.pending.items()):
+            if now >= deadline:
+                command = self.pending_kind.get(ident, "command")
+                self._fail(f"Intiface did not answer {command}")
+        if now >= self.next_ping:
+            self.send("Ping", {})
+            self.next_ping = now + self.ping_every
+
     def request(self, kind, fields, timeout=3.):
-        ident = self.send(kind, fields)
         deadline = time.monotonic() + timeout
+        ident = self.send(kind, fields, timeout=timeout)
         while time.monotonic() < deadline:
-            text = self.ws.recv(max(0., deadline - time.monotonic()))
+            now = time.monotonic()
+            self._maintain(now)
+            wake = min(deadline, self.next_ping, *(d for d, _ in self.pending.values()))
+            text = self.ws.recv(max(0., wake - now))
             if text is None:
                 continue
             reply = self._handle(text).get(ident)
             if reply:
                 if reply[0] == "Error":
-                    raise ConnectionClosed(reply[1].get("ErrorMessage", "Intiface error"))
+                    self._fail(reply[1]["ErrorMessage"][:200])
                 return reply
-        raise ConnectionClosed(f"Intiface did not answer {kind}")
+        self._fail(f"Intiface did not answer {kind}")
 
     def poll(self):
         work_deadline = time.monotonic() + RECV_WORK
@@ -354,33 +452,30 @@ class Client:
             self._handle(text)
             if time.monotonic() >= work_deadline:
                 break
-        now = time.monotonic()
-        for ident, (deadline, _) in list(self.pending.items()):
-            if now > deadline:
-                command = self.pending_kind.pop(ident, None)
-                del self.pending[ident]
-                if command in OUTPUT_COMMANDS or command == "Ping":
-                    self._fail(f"Intiface did not answer {command}")
-        if now >= self.next_ping:
-            self.send("Ping", {})
-            self.next_ping = now + self.ping_every
+        self._maintain(time.monotonic())
 
     def busy(self, index):
         return any(device == index for _, device in self.pending.values())
 
     def start_scanning(self):
-        self.send("StartScanning", {})
-        self.scanning = True
+        if not self.scanning:
+            self.scan_id = self.send("StartScanning", {})
+            self.scanning = True
 
     def stop_scanning(self):
         if self.scanning:
-            self.send("StopScanning", {})
+            self.scan_id = self.send("StopScanning", {})
             self.scanning = False
 
     def stop_all(self):
         self.send("StopAllDevices", {})
 
     def close(self):
+        self.closed = True
+        self.scanning = False
+        self.scan_id = None
+        self.pending.clear()
+        self.pending_kind.clear()
         self.ws.close()
 
 

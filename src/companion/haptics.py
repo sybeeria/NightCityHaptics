@@ -14,6 +14,8 @@ CUE_RISE, CUE_FALL = .06, .64  # shape of one cue pulse in a scene track
 
 
 def clamp(value, low=0., high=1.):
+    if isinstance(value, bool):
+        return low
     try:
         value = float(value)
     except (TypeError, ValueError, OverflowError):
@@ -189,14 +191,18 @@ class Mixer:
         magnitude = clamp(magnitude)
         if magnitude <= 0:
             return
-        voice = self.voices.get(name)
-        if voice and voice.get("feel") == feel and self._voice_value(voice, now) > magnitude:
-            return
         scale = 1.
         effect = self.effects.get(feel)
         if seconds and effect:
             scale = clamp(seconds, .05, 600) / max(.01, effect["points"][-1][0])
-        self.voices[name] = {"start": now, "magnitude": magnitude, "feel": feel, "scale": scale}
+        candidate = {"start": now, "magnitude": magnitude, "feel": feel, "scale": scale}
+        voice = self.voices.get(name)
+        # Swells and scene tracks can start below their event magnitude. Compare
+        # the waveforms at this instant so a weaker retrigger cannot cut a stronger voice.
+        if (voice and voice.get("feel") == feel and magnitude < voice["magnitude"]
+                and self._voice_value(voice, now) > self._voice_value(candidate, now)):
+            return
+        self.voices[name] = candidate
 
     def game_event(self, event_id, magnitude, now, feel, seconds=None):
         """Play one game event. "<id>:<variant>" picks a scene track when the feel is
@@ -298,6 +304,7 @@ class GameLink:
         self.timeout = timeout
         self.session = None
         self.seq = -1
+        self.clock = None
         self.last_event = -1
         self.changed = None
         self.state = {}
@@ -314,15 +321,18 @@ class GameLink:
         events = state["events"]
         if session != self.session:
             self.session, self.seq, self.changed, self.state = session, seq, None, state
+            self.clock = state["t"]
             self.last_event = max([e[0] for e in events], default=-1)
             return []
-        if seq <= self.seq:
-            if seq < self.seq:  # rewritten file; treat as a fresh baseline
+        rewound = self.clock is not None and state["t"] < self.clock
+        if seq <= self.seq or rewound:
+            if seq < self.seq or rewound:  # rewritten file; treat as a fresh baseline
                 self.seq, self.changed, self.state = seq, None, state
+                self.clock = state["t"]
                 self.last_event = max([e[0] for e in events], default=-1)
             return []
         self.seq, self.changed, self.state = seq, now, state
-        game_time = state["t"]
+        self.clock = game_time = state["t"]
         fresh = []
         for event in sorted(events, key=lambda e: e[0]):
             if event[0] <= self.last_event:
@@ -351,7 +361,8 @@ class GameLink:
             return None
         if not isinstance(raw.get("session"), str) or not 0 < len(raw["session"]) <= 128:
             return None
-        if type(raw.get("seq")) is not int or raw["seq"] < 0 or not finite(raw.get("t")):
+        if (type(raw.get("seq")) is not int or raw["seq"] < 0
+                or not finite(raw.get("t")) or raw["t"] < 0):
             return None
         if type(raw.get("active")) is not bool or type(raw.get("paused", False)) is not bool:
             return None
@@ -373,7 +384,7 @@ class GameLink:
             if (not isinstance(event, list) or not 4 <= len(event) <= 5
                     or type(event[0]) is not int or event[0] < 0
                     or not isinstance(event[1], str) or not 0 < len(event[1]) <= 128
-                    or not finite(event[2]) or not finite(event[3])):
+                    or not finite(event[2]) or not finite(event[3]) or event[3] < 0):
                 continue
             if len(event) == 5 and (not finite(event[4]) or not .05 <= event[4] <= 600):
                 continue

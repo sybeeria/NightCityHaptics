@@ -278,6 +278,25 @@ class LaunchTests(unittest.TestCase):
         child.kill.assert_called_once_with()
         self.assertEqual(child.wait.call_args_list, [mock.call(5.0), mock.call(1.0)])
 
+    def test_local_ping_cannot_follow_redirect_to_another_listener(self):
+        with PingServer() as target:
+            class Redirect(BaseHTTPRequestHandler):
+                def log_message(self, *_):
+                    pass
+                def do_GET(self):
+                    self.send_response(302)
+                    self.send_header("Location", "http://127.0.0.1:{}/api/ping".format(target.port))
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+            server = ThreadingHTTPServer(("127.0.0.1", 0), Redirect)
+            thread = threading.Thread(target=server.serve_forever, daemon=True)
+            thread.start()
+            try:
+                self.assertFalse(launcher.already_running(server.server_port))
+                self.assertEqual(target.requests, [])
+            finally:
+                server.shutdown(); server.server_close(); thread.join()
+
     def test_ping_bypasses_configured_proxy(self):
         with PingServer() as existing, mock.patch.dict(os.environ, {
                 "HTTP_PROXY": "http://127.0.0.1:1", "http_proxy": "http://127.0.0.1:1",

@@ -625,6 +625,93 @@ check(table.concat(textLines, " "):find("App not running", 1, true) ~= nil, "a s
 ImGui.Text, ImGui.TextColored = oldText, oldColored
 events.onOverlayClose(); frames(.1)
 
+-- An arm is cancelled by dressing too; it cannot leak into a later shower.
+fresh(); world.facts.q003_stout_sex_agreed = 1; frames(.1)
+mark = lastNumber()
+fire("InvisibleSceneStash.OnQuestDressPlayer", {}, {})
+fire("InvisibleSceneStash.OnQuestUndressPlayer", {}, {})
+check(next(state().scene) == nil and idsSince(mark) == "", "dressing cancels an unplayed Stout arm without inventing an end event")
+
+-- Invalid external magnitudes/durations and sensor values must remain silent.
+fresh(); mark = lastNumber()
+for _, strength in ipairs({0 / 0, math.huge, -math.huge, 0, -1, "0.5", false}) do
+  check(mod.Pulse(strength, 1) == false, "invalid external strength is rejected: " .. tostring(strength))
+end
+check(mod.Pulse(nil, 1) == false and mod.Pulse(.5, 0) == false and mod.Pulse(.5, -1) == false,
+  "Pulse requires a positive finite strength and duration")
+frames(.1)
+check(idsSince(mark) == "", "invalid external input does not emit a substitute buzz")
+for _, position in ipairs({{x = 0 / 0, y = 0, z = 0}, {x = math.huge, y = 0, z = 0}}) do
+  fire("AudioSystem.PlayShockwave", nil, "explosion", position)
+end
+check(idsSince(mark) == "", "invalid explosion coordinates cannot become a minimum-strength blast")
+world.mounted, world.speed = true, math.huge; frames(.1)
+check(state().levels.engine == 0 and state().levels.drift == 0, "an invalid vehicle speed cannot become full engine output")
+world.speed, world.slip = 10, math.huge; frames(.1)
+check(state().levels.engine > 0 and state().levels.drift == 0, "invalid slip remains silent while valid engine feedback continues")
+world.psm.Swimming, world.oxygen = ordinal("gamePSMSwimming", "Diving"), -math.huge; frames(.1)
+check(state().levels.oxygen == 0, "invalid oxygen cannot become full-strength feedback")
+
+-- File boundary failures must be caught and later writes must recover.
+fresh()
+local normalOpen = io.open
+for _, mode in ipairs({"open_nil", "open_throw", "write_nil", "write_throw", "close_nil", "close_throw"}) do
+  local beforeFailure = state().seq
+  io.open = function(path, openMode)
+    if path ~= "state.json" or openMode ~= "w" then return normalOpen(path, openMode) end
+    if mode == "open_nil" then return nil, "permission denied" end
+    if mode == "open_throw" then error("permission denied") end
+    return {
+      write = function()
+        if mode == "write_nil" then return nil, "disk full" end
+        if mode == "write_throw" then error("disk full") end
+        return true
+      end,
+      close = function()
+        if mode == "close_nil" then return nil, "flush failed" end
+        if mode == "close_throw" then error("flush failed") end
+        return true
+      end}
+  end
+  check(pcall(frames, .3), "telemetry " .. mode .. " does not escape the CET callback")
+  check(state().seq == beforeFailure, "a failed telemetry write does not publish a false heartbeat: " .. mode)
+  io.open = normalOpen; frames(.5)
+  check(state().seq > beforeFailure and state().errors["state.json"] == nil,
+    "telemetry heartbeat recovers after " .. mode)
+end
+io.open = function(path, mode)
+  if path == "status.json" then error("unreadable status") end
+  return normalOpen(path, mode)
+end
+check(pcall(frames, .6), "a status read failure cannot stall the CET heartbeat")
+io.open = normalOpen; frames(.6)
+check(state().errors["status.json"] == nil, "status read errors clear after the file recovers")
+
+-- Malformed display fields cannot crash ImGui or refresh app liveness.
+fresh()
+local oldProgress, displayed = ImGui.ProgressBar
+ImGui.ProgressBar = function(value) displayed = value end
+files["status.json"] = json.encode({running = true, heartbeat = 101, devices = {"valid"}, output = 50})
+frames(.6); events.onOverlayOpen(); events.onDraw()
+check(displayed == 1, "finite status output is clamped before reaching ImGui")
+for _, bad in ipairs({
+    {running = true, heartbeat = 102, devices = {42}, output = .5},
+    {running = true, heartbeat = 103, devices = "wrong", output = .5},
+    {running = true, heartbeat = 104, devices = {}, output = "wrong"},
+    {running = "wrong", heartbeat = 105, devices = {}, output = .5}}) do
+  files["status.json"] = json.encode(bad); frames(4)
+  check(pcall(events.onDraw) and displayed == 0, "invalid status display fields expire safely")
+end
+files["status.json"] = '{"running":true,"heartbeat":106,"devices":[],"output":1e999}'
+frames(.6)
+check(pcall(events.onDraw) and displayed == 0, "an infinite JSON output is rejected before rendering")
+files["status.json"] = string.rep(" ", 65537)
+check(pcall(frames, .6), "oversized status input stays bounded and cannot stall telemetry")
+files["status.json"] = json.encode({running = true, heartbeat = 107, devices = {}, output = .4})
+frames(.6); events.onDraw()
+check(displayed == .4, "valid status recovers after malformed snapshots")
+ImGui.ProgressBar = oldProgress; events.onOverlayClose(); frames(.1)
+
 -- Sessions: a new player attachment starts a fresh session and clears its scene.
 world.facts.sq030_sex_done = 1; frames(.1)
 local session = state().session

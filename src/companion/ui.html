@@ -255,11 +255,71 @@ function el(tag, props = {}, ...children) {
   e.append(...children);
   return e;
 }
-async function api(path, body) {
-  const res = await fetch('/api/' + path, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-NCH': '1'}, body: JSON.stringify(body || {})});
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok) { toast(data.error || 'Something went wrong', true); throw new Error(data.error); }
-  return data;
+let settingsQueue = Promise.resolve(), pendingSettings = 0, settingsEpoch = 0, settingsFailed = false;
+const pendingSaves = new Map();
+function applySettings(change) {
+  if (!S) return;
+  for (const [key, value] of Object.entries(change)) {
+    if (key === 'interactions' || key === 'devices') {
+      for (const [name, options] of Object.entries(value)) {
+        S.settings[key][name] = {...S.settings[key][name], ...options};
+        if (key === 'devices') for (const d of S.devices) {
+          if ((d.settings_key || d.key) === name) Object.assign(d.settings, options);
+        }
+      }
+    } else S.settings[key] = value;
+  }
+  update();
+}
+async function request(path, body) {
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 8000);
+  try {
+    const res = await fetch('/api/' + path, {method: 'POST', headers: {'Content-Type': 'application/json', 'X-NCH': '1'}, body: JSON.stringify(body || {}), signal: controller.signal});
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || 'Something went wrong');
+    return data;
+  } catch (e) {
+    toast(e.name === 'AbortError' ? 'The app did not respond' : e.message || 'Could not reach the app', true);
+    throw e;
+  } finally { clearTimeout(timeout); }
+}
+function flushSaves() {
+  for (const [key, change] of pendingSaves) {
+    clearTimeout(timers[key]); pendingSaves.delete(key);
+    api('settings', change).catch(() => {});
+  }
+}
+function enqueue(path, body, changesSettings) {
+  if (changesSettings) { pendingSettings++; settingsEpoch++; }
+  const result = settingsQueue.catch(() => {}).then(async () => {
+    if ((path === 'try' || path === 'test-device') && settingsFailed) {
+      const message = 'Settings were not saved; preview stopped.';
+      toast(message, true); throw new Error(message);
+    }
+    try {
+      const reply = await request(path, body);
+      return reply;
+    } catch (e) {
+      if (changesSettings) settingsFailed = true;
+      throw e;
+    }
+  });
+  settingsQueue = result.finally(() => {
+    if (changesSettings) { pendingSettings--; settingsEpoch++; }
+  });
+  settingsQueue.catch(() => {});
+  return result;
+}
+function api(path, body) {
+  if (path === 'settings') {
+    applySettings(body || {});
+    return enqueue(path, body, true);
+  }
+  // Quit bypasses slow work so stopping the app never waits behind a preview.
+  if (path === 'quit') return request(path, body);
+  // Try/Test must use the strength just selected, even during debounce.
+  flushSaves();
+  return enqueue(path, body, path === 'reset');
 }
 let toastTimer;
 function toast(text, err) {
@@ -270,7 +330,10 @@ function toast(text, err) {
 const timers = {};
 function save(change, key, delay = 0) {
   clearTimeout(timers[key]);
-  timers[key] = setTimeout(() => api('settings', change).catch(() => {}), delay);
+  settingsEpoch++; pendingSaves.set(key, change); applySettings(change);
+  timers[key] = setTimeout(() => {
+    pendingSaves.delete(key); api('settings', change).catch(() => {});
+  }, delay);
 }
 function fill(r) { r.style.setProperty('--p', r.value + '%'); }
 function track(r, key, onchange) {
@@ -302,7 +365,9 @@ function checkbox(checked, label, onchange) {
   c.addEventListener('change', () => onchange(c.checked));
   return c;
 }
-function button(text, onclick, className = 'pill small') { return el('button', {className, textContent: text, onclick}); }
+function button(text, onclick, className = 'pill small') {
+  return el('button', {className, textContent: text, onclick: () => Promise.resolve().then(onclick).catch(() => {})});
+}
 
 // ---- interactions ----
 let open;
@@ -477,15 +542,27 @@ function drawBars() {
 }
 
 async function poll() {
+  const epoch = settingsEpoch, controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
   try {
-    const res = await fetch('/api/state', {headers: catalog ? {} : {'X-NCH-Catalog': '1'}});
-    S = await res.json();
+    const res = await fetch('/api/state', {headers: catalog ? {} : {'X-NCH-Catalog': '1'}, signal: controller.signal});
+    if (!res.ok) throw new Error('State unavailable');
+    const state = await res.json();
+    // A poll begun before a write completed may still contain the old settings.
+    if (S && (pendingSettings || pendingSaves.size || epoch !== settingsEpoch)) {
+      state.settings = S.settings;
+      for (const d of state.devices) {
+        const old = S.devices.find(previous => previous.key === d.key);
+        if (old) d.settings = old.settings;
+      }
+    } else settingsFailed = false;
+    S = state;
     if (!catalog) { catalog = S.catalog; buildInteractions(); }
-    failures = 0; $('offline').classList.remove('show');
     update();
+    failures = 0; $('offline').classList.remove('show');
   } catch (e) {
     if (++failures > 8) $('offline').classList.add('show');
-  }
+  } finally { clearTimeout(timeout); }
   setTimeout(poll, document.hidden ? 1000 : 100);
 }
 function update() { if (S) { updateStatus(); updateInteractions(); updateDevices(); drawBars(); } }
@@ -523,15 +600,15 @@ let settingsOpen = location.hash === '#settings';
 try { settingsOpen = settingsOpen || localStorage.getItem('nch-settings') === '1'; } catch (e) {}
 showSettings(settingsOpen);
 
-$('power').onclick = () => api('settings', {enabled: !S.settings.enabled}).catch(() => {});
+$('power').onclick = () => { if (S) api('settings', {enabled: !S.settings.enabled}).catch(() => {}); };
 track($('master'), 'master', v => { $('masterv').textContent = pct(v); save({max_strength: v}, 'master', 200); });
-$('scan').onclick = () => api('scan');
-$('reconnect').onclick = () => api('reconnect').then(() => toast('Reconnecting'));
-$('download').onclick = () => api('download-engine');
+$('scan').onclick = () => api('scan').catch(() => {});
+$('reconnect').onclick = () => api('reconnect').then(() => toast('Reconnecting')).catch(() => {});
+$('download').onclick = () => api('download-engine').catch(() => {});
 $('autostart').onchange = e => save({start_intiface: e.target.checked}, 'auto');
 $('address').onchange = e => save({intiface_address: e.target.value.trim()}, 'addr');
-$('reset').onclick = () => { if (confirm('Reset every interaction to its default?')) api('reset').then(() => toast('Defaults restored')); };
-$('quit').onclick = () => { if (confirm('Stop all devices and close Night City Haptics?')) api('quit').then(() => setTimeout(() => $('offline').classList.add('show'), 600)); };
+$('reset').onclick = () => { if (confirm('Reset every interaction to its default?')) api('reset').then(() => toast('Defaults restored')).catch(() => {}); };
+$('quit').onclick = () => { if (confirm('Stop all devices and close Night City Haptics?')) api('quit').then(() => setTimeout(() => $('offline').classList.add('show'), 600)).catch(() => {}); };
 poll();
 </script>
 </body>

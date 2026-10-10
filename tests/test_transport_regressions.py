@@ -147,6 +147,8 @@ def actual_client():
     client.pending, client.pending_kind = {}, {}
     client.devices, client.errors = {1: device()}, []
     client.scanning, client.next_ping, client.ping_every = False, float("inf"), 0
+    client.closed = False
+    client.scan_id = None
     return client
 
 
@@ -213,6 +215,191 @@ class AcknowledgementRegressions(unittest.TestCase):
         finally:
             if previous is not None:
                 sys.set_int_max_str_digits(previous)
+
+
+class TransportAuditRegressions(unittest.TestCase):
+    def test_ping_requires_ok_and_rejects_unrelated_matching_reply(self):
+        client = actual_client()
+        ident = client.send("Ping", {})
+        with self.assertRaisesRegex(buttplug.ConnectionClosed, "reply to Ping"):
+            client._handle(json.dumps([{"DeviceList": {"Id": ident, "Devices": []}}]))
+        self.assertTrue(client.closed)
+
+    def test_failed_scan_clears_scanning_and_remains_retryable(self):
+        client = actual_client()
+        client.start_scanning()
+        client.start_scanning()
+        self.assertEqual(len(client.ws.sent), 1, "repeated clicks reuse an active scan")
+        client._handle(json.dumps([{"Error": {"Id": client.next_id, "ErrorCode": 4,
+                                               "ErrorMessage": "Bluetooth unavailable"}}]))
+        self.assertFalse(client.scanning)
+        self.assertFalse(client.closed)
+        client.start_scanning()
+        self.assertTrue(client.scanning)
+        self.assertEqual(len(client.ws.sent), 2)
+
+    def test_late_failure_from_finished_scan_does_not_clear_a_new_scan(self):
+        client = actual_client()
+        client.start_scanning()
+        old_id = client.next_id
+        client._handle('[{"ScanningFinished":{"Id":0}}]')
+        client.start_scanning()
+        client._handle(json.dumps([{"Error": {"Id": old_id, "ErrorCode": 4,
+                                               "ErrorMessage": "old scan error"}}]))
+        self.assertTrue(client.scanning)
+        self.assertEqual(client.scan_id, 2)
+        self.assertFalse(client.closed)
+
+    def test_unanswered_scan_closes_instead_of_leaving_false_scan_state(self):
+        client = actual_client()
+        with patch.object(buttplug.time, "monotonic", return_value=0):
+            client.start_scanning()
+        with patch.object(buttplug.time, "monotonic", return_value=3):
+            with self.assertRaisesRegex(buttplug.ConnectionClosed, "did not answer StartScanning"):
+                client.poll()
+        self.assertFalse(client.scanning)
+        self.assertTrue(client.closed)
+        self.assertFalse(client.pending)
+
+    def test_failed_stop_scan_closes_uncertain_server_session(self):
+        client = actual_client()
+        client.start_scanning()
+        client._handle('[{"Ok":{"Id":1}}]')
+        client.stop_scanning()
+        with self.assertRaisesRegex(buttplug.ConnectionClosed, "stop failed"):
+            client._handle('[{"Error":{"Id":2,"ErrorCode":4,"ErrorMessage":"stop failed"}}]')
+        self.assertTrue(client.closed)
+
+    def test_server_watchdog_error_without_matching_id_disconnects(self):
+        client = actual_client()
+        with self.assertRaisesRegex(buttplug.ConnectionClosed, "watchdog expired"):
+            client._handle('[{"Error":{"Id":0,"ErrorCode":2,"ErrorMessage":"watchdog expired"}}]')
+        self.assertTrue(client.closed)
+
+    def test_pending_command_bound_still_sends_final_stop_and_closes(self):
+        client = actual_client()
+        with patch.object(buttplug, "MAX_PENDING", 4):
+            for _ in range(4): client.send("ScalarCmd", {"DeviceIndex": 1, "Scalars": []}, 1)
+            with self.assertRaisesRegex(buttplug.ConnectionClosed, "Too many pending"):
+                client.send("ScalarCmd", {"DeviceIndex": 1, "Scalars": []}, 1)
+        self.assertTrue(client.closed)
+        self.assertFalse(client.pending)
+        self.assertEqual(next(iter(client.ws.sent[-1])), "StopAllDevices")
+
+    def test_wrapping_ids_skip_an_outstanding_match(self):
+        client = actual_client()
+        first = client.send("Ping", {})
+        client.next_id = buttplug.MAX_PROTOCOL_ID
+        second = client.send("StartScanning", {})
+        self.assertEqual((first, second), (1, 2))
+        self.assertEqual(client.pending_kind[first], "Ping")
+        self.assertEqual(client.pending_kind[second], "StartScanning")
+
+    def test_closed_client_rejects_further_commands(self):
+        client = actual_client()
+        client.send("Ping", {})
+        client.close()
+        self.assertFalse(client.pending)
+        with self.assertRaisesRegex(buttplug.ConnectionClosed, "is closed"):
+            client.send("Ping", {})
+        self.assertEqual(len(client.ws.sent), 1)
+
+    def test_protocol_ids_system_ids_and_json_numbers_are_strict(self):
+        samples = ['[{"Ok":{"Id":-1}}]', '[{"Ok":{"Id":4294967296}}]',
+                   '[{"Ok":{"Id":true}}]', '[{"Ok":{"Id":1,"Id":2}}]',
+                   '[{"Ok":{"Id":0,"value":NaN}}]', '[{"Ok":{"Id":0,"value":1e999}}]',
+                   '[{"DeviceRemoved":{"Id":1,"DeviceIndex":1}}]',
+                   '[{"DeviceRemoved":{"Id":0,"DeviceIndex":-1}}]',
+                   '[{"ScanningFinished":{"Id":2}}]', '[]']
+        for text in samples:
+            client = actual_client()
+            with self.subTest(text=text), self.assertRaises(buttplug.ConnectionClosed):
+                client._handle(text)
+            self.assertTrue(client.closed)
+
+    def test_invalid_actuator_numbers_or_names_disconnect(self):
+        for command, attrs in (("ScalarCmd", [{"ActuatorType": "Vibrate", "StepCount": True}]),
+                               ("ScalarCmd", [{"ActuatorType": []}]),
+                               ("ScalarCmd", [{}]), ("RotateCmd", [{"StepCount": -1}]),
+                               ("LinearCmd", [{"StepCount": 4294967296}])):
+            client = actual_client()
+            d = device()
+            d["DeviceMessages"][command] = attrs
+            with self.subTest(command=command, attrs=attrs), self.assertRaises(buttplug.ConnectionClosed):
+                client._add(d)
+            self.assertTrue(client.closed)
+
+    def test_delayed_device_list_keeps_negotiated_watchdog_alive(self):
+        now = [0.]
+        class WatchdogPeer(TextSocket):
+            def __init__(self, url):
+                super().__init__()
+                self.ready = []
+                self.last_ping = 0.
+                self.list_id = None
+            def send(self, text):
+                super().send(text)
+                message = json.loads(text)[0]
+                kind, fields = next(iter(message.items()))
+                if kind == "RequestServerInfo":
+                    self.ready.append({"ServerInfo": {"Id": fields["Id"], "ServerName": "Delayed",
+                                                       "MessageVersion": 3, "MaxPingTime": 1000}})
+                elif kind == "RequestDeviceList": self.list_id = fields["Id"]
+                elif kind == "Ping":
+                    self.last_ping = now[0]
+                    self.ready.append({"Ok": {"Id": fields["Id"]}})
+            def recv(self, timeout):
+                if self.ready: return json.dumps([self.ready.pop(0)])
+                now[0] += min(timeout, max(0., 1.6 - now[0]))
+                if now[0] - self.last_ping > 1:
+                    raise buttplug.ConnectionClosed("watchdog expired during request")
+                if now[0] >= 1.6 and self.list_id is not None:
+                    ident, self.list_id = self.list_id, None
+                    return json.dumps([{"DeviceList": {"Id": ident, "Devices": []}}])
+                return None
+        with patch.object(buttplug, "WebSocket", WatchdogPeer), \
+                patch.object(buttplug.time, "monotonic", side_effect=lambda: now[0]):
+            client = buttplug.Client("ws://127.0.0.1:12345")
+        self.assertFalse(client.closed)
+        self.assertGreaterEqual(sum("Ping" in m for m in client.ws.sent), 3)
+        self.assertAlmostEqual(now[0], 1.6)
+
+    def test_request_timeout_closes_and_clears_pending_match(self):
+        client = actual_client()
+        now = [0.]
+        def receive(timeout):
+            now[0] += timeout
+            return None
+        with patch.object(client.ws, "recv", side_effect=receive), \
+                patch.object(buttplug.time, "monotonic", side_effect=lambda: now[0]):
+            with self.assertRaisesRegex(buttplug.ConnectionClosed, "did not answer RequestDeviceList"):
+                client.request("RequestDeviceList", {}, timeout=.1)
+        self.assertTrue(client.closed)
+        self.assertFalse(client.pending)
+
+    def test_invalid_server_ping_information_or_duplicate_device_index_closes(self):
+        for fields in ({"MessageVersion": 3.0}, {"MaxPingTime": True}, {"MaxPingTime": -1}, {"MaxPingTime": 4294967296},
+                       {"ServerName": []}, {"duplicate": True}):
+            peers = []
+            class InfoPeer(TextSocket):
+                def __init__(self, url):
+                    super().__init__()
+                    self.ready = []
+                    peers.append(self)
+                def send(self, text):
+                    super().send(text)
+                    kind, data = next(iter(json.loads(text)[0].items()))
+                    if kind == "RequestServerInfo":
+                        info = {"Id": data["Id"], "ServerName": "Test", "MessageVersion": 3, "MaxPingTime": 0}
+                        info.update({k: v for k, v in fields.items() if k != "duplicate"})
+                        self.ready.append({"ServerInfo": info})
+                    elif kind == "RequestDeviceList":
+                        self.ready.append({"DeviceList": {"Id": data["Id"], "Devices": [device(), device()]}})
+                def recv(self, timeout): return json.dumps([self.ready.pop(0)]) if self.ready else None
+            with self.subTest(fields=fields), patch.object(buttplug, "WebSocket", InfoPeer):
+                with self.assertRaises(buttplug.ConnectionClosed):
+                    buttplug.Client("ws://127.0.0.1:12345")
+            self.assertTrue(peers[0].closed)
 
 
 def frame(opcode, payload=b"", fin=True):
@@ -327,6 +514,33 @@ class WebSocketRegressions(unittest.TestCase):
         self.assertIn(b"GET /control?mode=test HTTP/1.1", sock.request)
         self.assertIn(b"Host: [::1]:12345", sock.request)
         self.assertFalse(sock.closed)
+
+
+class HandshakeAuditRegressions(unittest.TestCase):
+    def test_invalid_address_rejects_before_socket_connection(self):
+        for url in ("ws://127.0.0.1:0/", "ws://user:password@127.0.0.1/", "ws://127.0.0.1/#ignored",
+                    "ws://127.0.0.1/path\r\nHeader:value", "ws://127.0.0.1/path with spaces"):
+            with self.subTest(url=url), patch.object(buttplug.socket, "create_connection") as connect:
+                with self.assertRaises(ValueError): buttplug.WebSocket(url)
+                connect.assert_not_called()
+
+    def test_invalid_status_duplicate_accept_and_unrequested_subprotocol_reject(self):
+        for extra in ("status", "duplicate", "subprotocol", "bad-header"):
+            class Handshake(ByteSocket):
+                def settimeout(self, timeout): pass
+                def setblocking(self, blocking): pass
+                def sendall(self, data):
+                    key = data.split(b"Sec-WebSocket-Key: ")[1].split(b"\r\n")[0]
+                    accept = base64.b64encode(hashlib.sha1(key + b"258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest())
+                    status = b"HTTP/1.1 101 Switching Protocols" if extra != "status" else b"garbage 101 Switching Protocols"
+                    suffix = {"duplicate": b"Sec-WebSocket-Accept: " + accept + b"\r\n",
+                              "subprotocol": b"Sec-WebSocket-Protocol: unexpected\r\n",
+                              "bad-header": b"invalid line\r\n"}.get(extra, b"")
+                    self.incoming = status + b"\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + accept + b"\r\n" + suffix + b"\r\n"
+            sock = Handshake()
+            with self.subTest(extra=extra), patch.object(buttplug.socket, "create_connection", return_value=sock):
+                with self.assertRaises(buttplug.ConnectionClosed): buttplug.WebSocket("ws://127.0.0.1:12345")
+            self.assertTrue(sock.closed)
 
 
 if __name__ == "__main__":

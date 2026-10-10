@@ -27,7 +27,7 @@ from websockets.asyncio.client import connect
 
 IDENTIFIER = "NCHVirtual"
 ADDRESS = "NCHSIM000001"
-VIBRATE = re.compile(r"Vibrate:(\d+);\Z")
+VIBRATE = re.compile(r"Vibrate:([0-9]{1,2});\Z")
 PAGE = r"""<!doctype html>
 <html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Night City Haptics · Virtual device</title>
@@ -88,6 +88,26 @@ def atomic_json(path: Path, value: dict):
         Path(temporary).unlink(missing_ok=True)
 
 
+def finite_number(value):
+    try:
+        return type(value) in (int, float) and math.isfinite(value)
+    except OverflowError:
+        return False
+
+
+def read_json(path, limit=262144):
+    """Read a bounded snapshot; interrupted or malformed telemetry is absent."""
+    try:
+        with path.open("rb") as handle:
+            raw = handle.read(limit + 1)
+        if len(raw) > limit:
+            return {}
+        value = json.loads(raw.decode("utf-8"))
+        return value if isinstance(value, dict) else {}
+    except (OSError, ValueError, UnicodeError, RecursionError, OverflowError):
+        return {}
+
+
 class Monitor:
     def __init__(self, mod_dir=None, state_file=None, heartbeat_timeout=1.0):
         self.mod_dir = Path(mod_dir).resolve() if mod_dir else None
@@ -108,33 +128,25 @@ class Monitor:
         self.labels = {}
         self.started = datetime.now(timezone.utc).isoformat()
         if self.mod_dir:
-            try:
-                catalog = json.loads((self.mod_dir / "companion/catalog.json").read_text(encoding="utf-8"))
-                self.labels = {x["id"]: x.get("label", x["id"]) for x in catalog["interactions"]}
-            except (OSError, ValueError, KeyError, TypeError):
-                pass
+            interactions = read_json(self.mod_dir / "companion/catalog.json").get("interactions", [])
+            if isinstance(interactions, list):
+                for item in interactions[:256]:
+                    if not isinstance(item, dict):
+                        continue
+                    key, label = item.get("id"), item.get("label")
+                    if isinstance(key, str) and 0 < len(key) <= 128:
+                        self.labels[key] = label if isinstance(label, str) and 0 < len(label) <= 256 else key
 
     def poll_game(self, now=None):
         now = time.monotonic() if now is None else now
-        state = {}
-        status = {}
-        if self.mod_dir:
-            try:
-                path = self.mod_dir / "state.json"
-                if path.stat().st_size <= 262144:
-                    state = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError, UnicodeError):
-                pass
-            try:
-                path = self.mod_dir / "status.json"
-                if path.stat().st_size <= 262144:
-                    status = json.loads(path.read_text(encoding="utf-8"))
-            except (OSError, ValueError, UnicodeError):
-                pass
+        state = read_json(self.mod_dir / "state.json") if self.mod_dir else {}
+        status = read_json(self.mod_dir / "status.json") if self.mod_dir else {}
         with self.lock:
             session = state.get("session") if isinstance(state, dict) else None
             seq = state.get("seq") if isinstance(state, dict) else None
-            if not isinstance(session, str) or not session or type(seq) is not int or seq < 0:
+            if (state.get("v") != 2 or not isinstance(session, str) or not 0 < len(session) <= 128
+                    or type(seq) is not int or seq < 0 or type(state.get("active")) is not bool
+                    or type(state.get("paused", False)) is not bool):
                 self.game_session = self.game_seq = self.game_changed = None
             elif session != self.game_session or self.game_seq is None or seq < self.game_seq:
                 self.game_session, self.game_seq, self.game_changed = session, seq, None
@@ -155,11 +167,11 @@ class Monitor:
             self.reactions = []
             if isinstance(contributions, dict):
                 for name, amount in contributions.items():
-                    if isinstance(name, str) and type(amount) in (int, float) and math.isfinite(amount) and amount > 0:
+                    if isinstance(name, str) and 0 < len(name) <= 128 and finite_number(amount) and amount > 0:
                         key = name[4:] if name.startswith("try:") else name
                         label = self.labels.get(key, key)
                         self.reactions.append({"id": name, "label": "Try: " + label if name.startswith("try:") else label,
-                                               "contribution": amount})
+                                               "contribution": min(1.0, amount)})
                 self.reactions.sort(key=lambda x: x["contribution"], reverse=True)
                 self.reactions = self.reactions[:8]
 
@@ -175,7 +187,7 @@ class Monitor:
                                  "game_live": False, "reactions": []})
 
     def handle_packet(self, packet):
-        if not isinstance(packet, (bytes, str)):
+        if not isinstance(packet, (bytes, str)) or len(packet) > 256:
             return None
         text = packet.decode("ascii", errors="replace") if isinstance(packet, bytes) else packet
         with self.lock:
@@ -208,6 +220,8 @@ class Monitor:
 
     def save(self):
         if self.state_file:
+            if self.mod_dir and self.state_file.resolve().is_relative_to(self.mod_dir):
+                raise ValueError("The simulator receipt must stay outside the installed mod folder")
             atomic_json(self.state_file, self.snapshot())
 
 
@@ -306,8 +320,15 @@ def main():
     parser.add_argument("--mod-dir", type=Path, help="Read-only game telemetry folder")
     parser.add_argument("--state-file", type=Path, help="Simulator receipt outside the installed mod folder")
     args = parser.parse_args()
-    endpoint = urlsplit(args.endpoint)
-    if endpoint.scheme != "ws" or endpoint.hostname != "127.0.0.1" or endpoint.username or endpoint.password:
+    try:
+        endpoint = urlsplit(args.endpoint)
+        valid_endpoint = (endpoint.scheme == "ws" and endpoint.hostname == "127.0.0.1"
+                          and endpoint.port is not None and 1 <= endpoint.port <= 65535
+                          and not endpoint.username and not endpoint.password
+                          and endpoint.path in ("", "/") and not endpoint.query and not endpoint.fragment)
+    except ValueError:
+        valid_endpoint = False
+    if not valid_endpoint:
         parser.error("The virtual device endpoint must be ws://127.0.0.1:PORT")
     if not 0 <= args.port <= 65535:
         parser.error("The HTTP port must be between 0 and 65535")

@@ -127,6 +127,38 @@ class MixerTests(unittest.TestCase):
         self.mixer.trigger("gunfire", 1, .02, "kick")
         self.assertEqual(self.mixer.voices["gunfire"]["magnitude"], 1)
 
+    def test_retrigger_compares_the_waveform_start_including_scaled_swells(self):
+        for feel, seconds, now in (("swell", None, .2), ("swell", 6, 1.),
+                                   ("slowbuild", None, 1.), ("track:stout", None, .1)):
+            with self.subTest(feel=feel, seconds=seconds):
+                self.mixer.clear()
+                self.mixer.trigger("external", 1., 0., feel, seconds)
+                before = self.mixer.tick(now, {}, self.settings)[0]
+                self.assertGreater(before, 0.)
+                voice = dict(self.mixer.voices["external"])
+                self.mixer.trigger("external", .5, now, feel, seconds)
+                self.assertEqual(self.mixer.voices["external"], voice)
+                self.assertEqual(self.mixer.tick(now, {}, self.settings)[0], before)
+
+    def test_retrigger_can_replace_a_faded_voice_or_a_changed_feel(self):
+        self.mixer.trigger("external", 1., 0., "kick")
+        self.mixer.trigger("external", .5, .2, "kick")
+        self.assertEqual(self.mixer.voices["external"]["start"], .2)
+        self.assertEqual(self.mixer.voices["external"]["magnitude"], .5)
+        self.mixer.trigger("external", .1, .21, "swell")
+        self.assertEqual(self.mixer.voices["external"]["feel"], "swell")
+
+    def test_full_strength_scene_anchors_and_previews_still_restart(self):
+        # A fresh clip can start with a lighter random pulse than the old one;
+        # its timeline must still restart at this full-strength anchor.
+        with mock.patch.object(haptics, "texture", side_effect=(1., .6)):
+            self.mixer.game_event("joytoy", 1., 0., "scene")
+            self.mixer.game_event("joytoy", 1., .1, "scene")
+        self.assertEqual(self.mixer.voices["joytoy"]["start"], .1)
+        self.mixer.trigger("try:external", 1., 0., "swell")
+        self.mixer.trigger("try:external", 1., .2, "swell")
+        self.assertEqual(self.mixer.voices["try:external"]["start"], .2)
+
     def test_seconds_stretch_an_effect(self):
         self.mixer.trigger("external", 1, 0, "swell", seconds=6)
         self.assertGreater(self.mixer.tick(5, {}, self.settings)[0], 0)
@@ -191,6 +223,20 @@ class MixerTests(unittest.TestCase):
         glitch = [haptics.texture("glitch", i / 50) for i in range(200)]
         self.assertTrue(0 < sum(1 for v in glitch if v) < 200)
 
+    def test_corrupt_numeric_limits_never_become_full_strength(self):
+        for malformed in (True, False, None, [], {}, "bad", float("nan"),
+                          float("inf"), float("-inf"), 10 ** 1000):
+            with self.subTest(value=malformed):
+                settings = haptics.normalize_settings({
+                    "max_strength": malformed,
+                    "interactions": {"hurt": {"strength": malformed}},
+                    "devices": {"Fixture": {"strength": malformed}}}, CATALOG)
+                self.assertEqual(settings["max_strength"], 0.)
+                self.assertEqual(settings["interactions"]["hurt"]["strength"], 0.)
+                self.assertEqual(settings["devices"]["Fixture"]["strength"], 0.)
+        # A numerical value stored as text remains compatible with older files.
+        self.assertEqual(haptics.normalize_settings({"max_strength": "0.2"}, CATALOG)["max_strength"], .2)
+
     def test_normalize_keeps_valid_and_drops_invalid(self):
         settings = haptics.normalize_settings({
             "max_strength": 4, "enabled": "yes",
@@ -225,6 +271,41 @@ class GameLinkTests(unittest.TestCase):
         self.assertEqual(link.update(heartbeat(seq=2, events=[(1, "jump", .5, 10, 3)]), .1), [("jump", .5, 3)])
         self.assertEqual(link.update(heartbeat(seq=3, events=[(1, "jump", .5, 10)]), .2), [])
         self.assertEqual(link.update(heartbeat(seq=4, t=20, events=[(2, "jump", 1, 10)]), .3), [], "10 s old")
+
+    def test_clock_rewind_with_advancing_sequence_is_only_a_baseline(self):
+        link = haptics.GameLink()
+        link.update(heartbeat(seq=10, t=20.), 0.)
+        link.update(heartbeat(seq=11, t=20.1, levels={"engine": .5}), .1)
+        self.assertTrue(link.active(.1))
+        self.assertEqual(link.update(heartbeat(seq=12, t=2., levels={"engine": .5},
+                                              events=[(1, "hurt", 1., 2.)]), .2), [])
+        self.assertFalse(link.active(.2))
+        self.assertEqual(link.levels(.2), {})
+        self.assertEqual(link.update(heartbeat(seq=13, t=2.1,
+                                              events=[(1, "hurt", 1., 2.),
+                                                      (2, "kill", .5, 2.1)]), .3),
+                         [("kill", .5, None)])
+        self.assertTrue(link.active(.3))
+
+    def test_negative_game_clock_fails_closed_and_negative_event_time_is_discarded(self):
+        link = haptics.GameLink()
+        link.update(heartbeat(seq=1), 0.)
+        link.update(heartbeat(seq=2, levels={"engine": 1.}), .1)
+        self.assertTrue(link.active(.1))
+        self.assertEqual(link.update(heartbeat(seq=3, t=-1., levels={"engine": 1.},
+                                              events=[(1, "hurt", 1., -1.)]), .2), [])
+        self.assertFalse(link.active(.2))
+        self.assertEqual(link.levels(.2), {})
+        # Corruption does not forget the last accepted clock: rewriting to an
+        # older nonnegative snapshot must still establish a new baseline.
+        self.assertEqual(link.update(heartbeat(seq=4, t=0.,
+                                              events=[(2, "hurt", 1., -.1),
+                                                      (3, "kill", .5, 0.)]), .3), [])
+        self.assertFalse(link.active(.3))
+        self.assertEqual(link.update(heartbeat(seq=5, t=.1,
+                                              events=[(4, "hurt", 1., -.1),
+                                                      (5, "kill", .5, .1)]), .4),
+                         [("kill", .5, None)])
 
     def test_stale_paused_and_new_sessions(self):
         link = haptics.GameLink()

@@ -1,4 +1,4 @@
--- Night City Haptics 0.5.0 (CET part)
+-- Night City Haptics 0.5.1 (CET part)
 -- Reports what happens in the game to the Night City Haptics companion app by
 -- sampling about 30 times a second and writing state.json on changes/events or
 -- at a quiet 5 Hz heartbeat. The companion owns
@@ -8,6 +8,8 @@
 -- player/player.script: OnGameAttached, OnDetach, OnDeath, OnHitAnimation (3806),
 --   OnTargetNeutraliziedEvent (6423, drives the kill marker);
 -- psm/weaponTransitions.script:2337 ShootEvents.OnEnter (one call per player shot);
+-- psm/meleeTransitions.script:2369/3115 MeleeAttackGenericEvents.OnEnter (each swing,
+--   including consecutive ComboAttack states; normal OnExit does not reset the enum);
 -- core/gameplay/psmImports.script: every gamePSM* enum polled below;
 -- audioSystem.script:28, fragGrenade.script:38, ExplosiveDevice.script:261,
 --   vehicleComponent.script:2445/3100/3152: explosions and collisions;
@@ -32,7 +34,7 @@
 -- psmImports.script:741 gamePSMMeleeWeapon Hold/ChargedHold (charged melee);
 -- blackboardDefinitions.script:753 Vehicle.RPMValue/RPMMax (car_hud.script:186, vcar_controller.script:158).
 -- Scene facts and timings checked against current vanilla .scene files.
-local mod = {version = "0.5.0"}
+local mod = {version = "0.5.1"}
 local R = {
   session = "", seq = 0, clock = 0, sampleClock = 0, writeClock = 0, overlay = false,
   loading = false, paused = false, shutdown = false, active = false, reason = "starting",
@@ -111,7 +113,7 @@ end
 
 -- Events are queued with an increasing number; the companion plays each once.
 local function event(id, magnitude, seconds, always)
-  if not always and not R.active then return false end
+  if not always and (not R.active or R.paused) then return false end
   if seconds ~= nil and (not finite(seconds) or seconds <= 0) then return false end
   magnitude = magnitude == nil and 1 or clamp(magnitude)
   if magnitude <= 0 then return false end
@@ -278,6 +280,14 @@ local function registerHooks()
     -- Releasing a charge fires a moment after the charge state ends.
     if R.chargeSeen and R.clock - R.chargeSeen < .3 then kick = math.max(kick, R.chargeLevel or 0) end
     event("gunfire", kick)
+  end)
+  hook("MeleeAttackGenericEvents", "OnEnter", function(_, _, interface)
+    if not interface or not samePlayer(interface.executionOwner) then return end
+    local state = interface.executionOwner:GetPlayerStateMachineBlackboard():GetInt(Game.GetAllBlackboardDefs().PlayerStateMachine.MeleeWeapon)
+    -- Combo attacks can re-enter with the same enum. The callback catches every
+    -- swing and seeds the polled fallback so it cannot duplicate this one.
+    R.seen.meleeWeapon = state
+    event("melee", isOneOf("gamePSMMeleeWeapon", state, {"FinalAttack", "StrongAttack"}) and 1 or .7)
   end)
   hook("PlayerPuppet", "OnHitAnimation", function(self, hit)
     if not samePlayer(self) or not hit or not hit.attackComputed then return end

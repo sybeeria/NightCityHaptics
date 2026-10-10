@@ -11,4 +11,4 @@ class UIQueueTests(unittest.TestCase):
         result = subprocess.run(["node", str(Path(__file__).with_name("ui_queue.js"))],
                                 capture_output=True, text=True, timeout=12)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(result.stdout.count("PASS "), 4)
+        self.assertEqual(result.stdout.count("PASS "), 7)

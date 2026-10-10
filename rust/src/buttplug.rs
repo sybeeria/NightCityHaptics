@@ -24,6 +24,7 @@ const MAX_BUFFER: usize = MAX_MESSAGE + 65536 + 14;
 const RECV_BYTES: usize = 256 * 1024;
 const RECV_FRAMES: usize = 64;
 const RECV_WORK: f64 = 0.01;
+pub const POLL_WORK: f64 = RECV_WORK;
 const MAX_PENDING: usize = 512;
 const BATTERY_EVERY: f64 = 60.;
 const EXPIRED_OUTPUT: &str = "Game heartbeat expired during output";
@@ -900,6 +901,9 @@ impl Client {
         Ok(replies)
     }
     pub fn refresh_batteries(&mut self, now: f64) -> Result<(), String> {
+        self.refresh_batteries_before(now, None)
+    }
+    fn refresh_batteries_before(&mut self, now: f64, deadline: Option<f64>) -> Result<(), String> {
         let reads: Vec<_> = self
             .devices
             .iter()
@@ -909,21 +913,30 @@ impl Client {
             if now < *self.battery_due.get(&index).unwrap_or(&0.) {
                 continue;
             }
+            // Battery telemetry is optional. Defer unsent reads instead of
+            // accumulating a separate transport timeout for every device.
+            if deadline.is_some_and(|deadline| monotonic() >= deadline) {
+                break;
+            }
             self.battery_due.insert(index, now + BATTERY_EVERY);
             if self.battery_reads.values().any(|r| r.0 == index) {
                 continue;
             }
-            let id = self.send_timeout(
+            let id = self.send_bounded(
                 "SensorReadCmd",
                 json!({"DeviceIndex": index, "SensorIndex": sensor, "SensorType": "Battery"}),
                 None,
                 5.,
+                deadline,
             )?;
             self.battery_reads.insert(id, (index, full));
         }
         Ok(())
     }
     fn maintain(&mut self, now: f64) -> Result<(), String> {
+        self.maintain_before(now, None)
+    }
+    fn maintain_before(&mut self, now: f64, deadline: Option<f64>) -> Result<(), String> {
         let expired: Vec<_> = self
             .pending
             .iter()
@@ -939,7 +952,7 @@ impl Client {
             }
         }
         if now >= self.next_ping {
-            self.send("Ping", json!({}), None)?;
+            self.send_bounded("Ping", json!({}), None, 2., deadline)?;
             self.next_ping = now + self.ping_every;
         }
         Ok(())
@@ -982,7 +995,11 @@ impl Client {
         self.fail(format!("Intiface did not answer {kind}"))
     }
     pub fn poll(&mut self) -> Result<(), String> {
-        let deadline = monotonic() + RECV_WORK;
+        self.poll_before(monotonic() + POLL_WORK)
+    }
+    /// Bound background control writes together with receive work so the next
+    /// heartbeat/Off gate cannot wait behind one battery timeout per device.
+    pub fn poll_before(&mut self, deadline: f64) -> Result<(), String> {
         for _ in 0..64 {
             let text = match self.ws.recv(0.) {
                 Ok(v) => v,
@@ -997,9 +1014,9 @@ impl Client {
             }
         }
         let now = monotonic();
-        self.maintain(now)?;
+        self.maintain_before(now, Some(deadline))?;
         if !self.closed {
-            self.refresh_batteries(now)?;
+            self.refresh_batteries_before(now, Some(deadline))?;
         }
         Ok(())
     }
@@ -1017,8 +1034,15 @@ impl Client {
         Ok(())
     }
     pub fn stop_scanning(&mut self) -> Result<(), String> {
+        self.stop_scanning_bounded(None)
+    }
+    pub fn stop_scanning_before(&mut self, deadline: f64) -> Result<(), String> {
+        self.stop_scanning_bounded(Some(deadline))
+    }
+    fn stop_scanning_bounded(&mut self, deadline: Option<f64>) -> Result<(), String> {
         if self.scanning {
-            self.scan_id = Some(self.send("StopScanning", json!({}), None)?);
+            self.scan_id =
+                Some(self.send_bounded("StopScanning", json!({}), None, 2., deadline)?);
             self.scanning = false;
         }
         Ok(())
@@ -1223,6 +1247,11 @@ pub trait CommandSink {
     fn devices(&self) -> &BTreeMap<u32, Value>;
     fn generation(&self, index: u32) -> u64;
     fn busy(&self, index: u32) -> bool;
+    /// A live transport clock measures work inside a supplied scheduler tick.
+    /// Deterministic sinks keep the caller's clock without real-time drift.
+    fn clock(&self) -> Option<f64> {
+        None
+    }
     fn send(&mut self, kind: &str, fields: Value, device: Option<u32>) -> Result<u32, String>;
     fn send_before(
         &mut self,
@@ -1237,6 +1266,12 @@ pub trait CommandSink {
         Ok(id)
     }
 }
+fn tick_time<C: CommandSink>(client: &C, now: f64, began: Option<f64>) -> f64 {
+    match (began, client.clock()) {
+        (Some(began), Some(finished)) => now + (finished - began).max(0.),
+        _ => now,
+    }
+}
 impl CommandSink for Client {
     fn devices(&self) -> &BTreeMap<u32, Value> {
         &self.devices
@@ -1246,6 +1281,9 @@ impl CommandSink for Client {
     }
     fn busy(&self, index: u32) -> bool {
         self.busy(index)
+    }
+    fn clock(&self) -> Option<f64> {
+        Some(monotonic())
     }
     fn send(&mut self, kind: &str, fields: Value, device: Option<u32>) -> Result<u32, String> {
         self.send(kind, fields, device)
@@ -1306,6 +1344,29 @@ impl Outputs {
     }
     pub fn reset(&mut self) {
         *self = Self::new();
+    }
+    pub fn stop_device<C: CommandSink>(
+        &mut self,
+        client: &mut C,
+        index: u32,
+        now: f64,
+    ) -> Result<(), String> {
+        let device = client.devices().get(&index).cloned();
+        let result = match device {
+            Some(device) => self.stop(client, &device, now),
+            None => Ok(()),
+        };
+        let stopped_at = self.last_send.get(&index).copied();
+        // Retire the target even when a write fails: its previous Test must
+        // never survive an Off action or restart on a later connection.
+        self.forget(index);
+        if result.is_ok() {
+            self.sent.insert(index, (Sent::Zero, now));
+            if let Some(stopped_at) = stopped_at {
+                self.last_send.insert(index, stopped_at);
+            }
+        }
+        result
     }
     fn forget(&mut self, index: u32) {
         self.sent.remove(&index);
@@ -1380,6 +1441,7 @@ impl Outputs {
         quiet: bool,
         deadline: Option<f64>,
     ) -> Result<(), String> {
+        let gate_clock = client.clock();
         let removed: BTreeSet<_> = self
             .identity
             .keys()
@@ -1400,9 +1462,10 @@ impl Outputs {
                     *old_generation != generation || old != &device
                 })
             {
-                self.stop(client, &device, now)?;
+                self.stop(client, &device, tick_time(client, now, gate_clock))?;
+                let stopped_at = self.last_send.get(&index).copied().unwrap_or(now);
                 self.forget(index);
-                self.last_send.insert(index, now);
+                self.last_send.insert(index, stopped_at);
             }
             self.identity.insert(index, (generation, device.clone()));
             let options = device_options(&device, settings);
@@ -1450,7 +1513,7 @@ impl Outputs {
             let changed_selection = self.selection.get(&index).is_some_and(|v| *v != selection);
             let mut stopped = false;
             if changed_selection {
-                self.stop(client, &device, now)?;
+                self.stop(client, &device, tick_time(client, now, gate_clock))?;
                 stopped = true;
                 self.sent.remove(&index);
                 old.clear();
@@ -1459,7 +1522,7 @@ impl Outputs {
             if !values.values().any(|v| *v > 0.) {
                 if !matches!(self.sent.get(&index), Some((Sent::Zero, _))) {
                     if !stopped {
-                        self.stop(client, &device, now)?;
+                        self.stop(client, &device, tick_time(client, now, gate_clock))?;
                     }
                     self.sent.insert(index, (Sent::Zero, now));
                 }
@@ -1512,10 +1575,11 @@ impl Outputs {
                 } else {
                     client.send(command.kind, command.fields, Some(index))?;
                 }
-                self.last_send.insert(index, now);
+                let sent_at = tick_time(client, now, gate_clock);
+                self.last_send.insert(index, sent_at);
                 if let Some((up, duration)) = command.motion {
                     self.stroke
-                        .insert(index, (up, now + duration as f64 / 1000.));
+                        .insert(index, (up, sent_at + duration as f64 / 1000.));
                 }
             }
         }
@@ -1527,6 +1591,7 @@ impl Outputs {
         device: &Value,
         now: f64,
     ) -> Result<(), String> {
+        let began = client.clock();
         let index = uint(&device["DeviceIndex"]).ok_or("Invalid Intiface device")?;
         self.queues.remove(&index);
         self.stroke.remove(&index);
@@ -1539,7 +1604,8 @@ impl Outputs {
                 Some(index),
             )?;
         }
-        self.last_send.insert(index, now);
+        let sent_at = tick_time(client, now, began);
+        self.last_send.insert(index, sent_at);
         Ok(())
     }
     fn enqueue(&mut self, index: u32, command: Queued) {
@@ -1721,6 +1787,64 @@ mod tests {
         (client, state)
     }
     #[test]
+    fn poll_control_work_does_not_accumulate_per_device_send_timeouts() {
+        struct SlowControlWire {
+            sent: usize,
+        }
+        impl Wire for SlowControlWire {
+            fn send(&mut self, _: &str) -> Result<(), String> {
+                std::thread::sleep(Duration::from_millis(25));
+                self.sent += 1;
+                Ok(())
+            }
+            fn recv(&mut self, _: f64) -> Result<Option<String>, String> {
+                Ok(None)
+            }
+            fn close(&mut self) {}
+        }
+        let mut client = Client::unconnected(Box::new(SlowControlWire { sent: 0 }));
+        for index in 0..64 {
+            client.add(rich(index)).unwrap();
+        }
+        let began = Instant::now();
+        let _ = client.poll();
+        assert!(
+            began.elapsed() < Duration::from_millis(100),
+            "optional control writes blocked the next safety gate for {:?}",
+            began.elapsed()
+        );
+        assert!(
+            client.closed,
+            "a blocked in-flight write must close the connection"
+        );
+        assert!(client.battery_due.len() <= 1);
+    }
+    #[test]
+    fn poll_defers_optional_reads_without_marking_them_sent() {
+        let (mut client, state) = mock_client();
+        client.add(rich(2)).unwrap();
+        client.poll_before(monotonic() - 1.).unwrap();
+        assert!(client.battery_due.is_empty());
+        assert!(state.lock().unwrap().sent.is_empty());
+        assert!(!client.closed);
+        client.poll_before(monotonic() + 1.).unwrap();
+        assert_eq!(client.battery_due.len(), 2);
+        assert_eq!(state.lock().unwrap().sent.len(), 2);
+    }
+    #[test]
+    fn scheduled_ping_and_scan_stop_share_poll_write_budget() {
+        let (mut client, state) = mock_client();
+        client.next_ping = 0.;
+        assert!(client.poll_before(monotonic() - 1.).is_err());
+        assert!(client.closed);
+        assert!(state.lock().unwrap().sent.is_empty());
+        let (mut client, state) = mock_client();
+        client.scanning = true;
+        assert!(client.stop_scanning_before(monotonic() - 1.).is_err());
+        assert!(client.closed);
+        assert!(state.lock().unwrap().sent.is_empty());
+    }
+    #[test]
     fn heartbeat_deadline_rejects_positive_output_but_allows_stop_and_zero() {
         let (mut client, state) = mock_client();
         let mut outputs = Outputs::new();
@@ -1870,6 +1994,230 @@ mod tests {
         if !replies.is_empty() {
             client.handle(&json!(replies).to_string()).unwrap();
         }
+    }
+    fn scheduler_snapshot(outputs: &Outputs, index: u32) -> String {
+        format!(
+            "{:?}",
+            (
+                outputs.sent.get(&index),
+                outputs.stroke.get(&index),
+                outputs.hold.get(&index),
+                outputs.selection.get(&index),
+                outputs.queues.get(&index),
+                outputs.last_send.get(&index),
+                outputs.identity.get(&index),
+                outputs.slow.get(&index),
+                outputs.ticked.get(&index),
+                outputs.clockwise.get(&index),
+            )
+        )
+    }
+    fn seed_scheduler(outputs: &mut Outputs, index: u32) {
+        outputs.sent.insert(
+            index,
+            (Sent::Values(BTreeMap::from([("vibrate", 0.8)])), 1.),
+        );
+        outputs.stroke.insert(index, (false, 50.));
+        outputs.hold.insert(index, (0.8, 50.));
+        outputs
+            .selection
+            .insert(index, BTreeSet::from(["vibrate", "heat", "stroke"]));
+        outputs.queues.insert(index, VecDeque::from([Queued { key: "LinearCmd", kind: "LinearCmd",
+            fields: json!({"DeviceIndex":index,"Vectors":[{"Index":0,"Position":0.1,"Duration":100}]}), motion: Some((false, 100)) }]));
+        outputs.last_send.insert(index, 1.);
+        outputs.identity.insert(index, (1, rich(index)));
+        outputs
+            .slow
+            .insert(index, BTreeMap::from([("heat", 0.8), ("constrict", 0.7)]));
+        outputs.ticked.insert(index, 1.);
+        outputs.clockwise.insert(index, false);
+    }
+    #[test]
+    fn stopping_one_device_retires_only_its_test_and_scheduler_then_allows_fresh_test() {
+        let (mut client, state) = mock_client();
+        client.add(rich(2)).unwrap();
+        let mut outputs = Outputs::new();
+        seed_scheduler(&mut outputs, 1);
+        seed_scheduler(&mut outputs, 2);
+        let other = scheduler_snapshot(&outputs, 2);
+        outputs.stop_device(&mut client, 1, 2.).unwrap();
+        assert_eq!(scheduler_snapshot(&outputs, 2), other);
+        let mut expected = Outputs::new();
+        expected.sent.insert(1, (Sent::Zero, 2.));
+        expected.last_send.insert(1, outputs.last_send[&1]);
+        assert!(outputs.last_send[&1] >= 2.);
+        assert_eq!(
+            scheduler_snapshot(&outputs, 1),
+            scheduler_snapshot(&expected, 1)
+        );
+        {
+            let sent = &state.lock().unwrap().sent;
+            assert_eq!(sent.len(), 2);
+            assert_eq!(sent[0]["StopDeviceCmd"]["DeviceIndex"], 1);
+            assert_eq!(sent[1]["ScalarCmd"]["DeviceIndex"], 1);
+            assert!(sent[1]["ScalarCmd"]["Scalars"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|scalar| scalar["Scalar"] == 0.));
+        }
+        acknowledge_pending(&mut client);
+        state.lock().unwrap().sent.clear();
+        outputs.hold.insert(1, (0.5, 3.));
+        outputs
+            .update(
+                &mut client,
+                0.,
+                &json!({"Synthetic fixture":{"on":false,"outputs":{"stroke":true}}}),
+                2.1,
+                true,
+            )
+            .unwrap();
+        acknowledge_pending(&mut client);
+        outputs
+            .update(
+                &mut client,
+                0.,
+                &json!({"Synthetic fixture":{"on":false,"outputs":{"stroke":true}}}),
+                2.2,
+                true,
+            )
+            .unwrap();
+        let sent = &state.lock().unwrap().sent;
+        assert!(sent
+            .iter()
+            .any(|command| command["ScalarCmd"]["DeviceIndex"] == 1
+                && command["ScalarCmd"]["Scalars"]
+                    .as_array()
+                    .is_some_and(|scalars| scalars.iter().any(|scalar| scalar["Scalar"] == 0.5))));
+        assert!(sent
+            .iter()
+            .any(|command| command["LinearCmd"]["DeviceIndex"] == 1
+                && command["LinearCmd"]["Vectors"][0]["Position"] == 0.5));
+    }
+    #[test]
+    fn stopping_one_device_retires_its_scheduler_even_if_transport_fails() {
+        let (mut client, state) = mock_client();
+        client.add(rich(2)).unwrap();
+        let mut outputs = Outputs::new();
+        seed_scheduler(&mut outputs, 1);
+        seed_scheduler(&mut outputs, 2);
+        let other = scheduler_snapshot(&outputs, 2);
+        state.lock().unwrap().fail_send = true;
+        assert!(outputs.stop_device(&mut client, 1, 2.).is_err());
+        assert_eq!(
+            scheduler_snapshot(&outputs, 1),
+            scheduler_snapshot(&Outputs::new(), 1)
+        );
+        assert_eq!(scheduler_snapshot(&outputs, 2), other);
+    }
+    #[test]
+    fn motion_duration_and_message_gap_start_when_slow_successful_write_finishes() {
+        struct DelayedSink {
+            devices: BTreeMap<u32, Value>,
+            elapsed: f64,
+            sent: Vec<Value>,
+        }
+        impl CommandSink for DelayedSink {
+            fn devices(&self) -> &BTreeMap<u32, Value> {
+                &self.devices
+            }
+            fn generation(&self, _: u32) -> u64 {
+                0
+            }
+            fn busy(&self, _: u32) -> bool {
+                false
+            }
+            fn clock(&self) -> Option<f64> {
+                Some(self.elapsed)
+            }
+            fn send(&mut self, kind: &str, fields: Value, _: Option<u32>) -> Result<u32, String> {
+                self.elapsed += 0.2;
+                self.sent.push(json!({kind:fields}));
+                Ok(self.sent.len() as u32)
+            }
+        }
+        let device = json!({"DeviceIndex":1,"DeviceName":"fixture","DeviceMessages":{"LinearCmd":[{"StepCount":99}]}});
+        let mut sink = DelayedSink {
+            devices: BTreeMap::from([(1, device)]),
+            elapsed: 0.,
+            sent: vec![],
+        };
+        let mut outputs = Outputs::new();
+        outputs
+            .update(&mut sink, 0.5, &json!({}), 10., false)
+            .unwrap();
+        assert!((outputs.stroke[&1].1 - 10.8).abs() < 1e-12);
+        outputs
+            .update(&mut sink, 0.5, &json!({}), 10.65, false)
+            .unwrap();
+        assert_eq!(
+            sink.sent.len(),
+            1,
+            "a stroke is still moving after the slow send"
+        );
+        outputs
+            .update(&mut sink, 0.5, &json!({}), 10.81, false)
+            .unwrap();
+        assert_eq!(sink.sent.len(), 2);
+        let device = json!({"DeviceIndex":1,"DeviceName":"fixture","DeviceMessageTimingGap":250,"DeviceMessages":{"ScalarCmd":[{"ActuatorType":"Vibrate","StepCount":20}]}});
+        let mut sink = DelayedSink {
+            devices: BTreeMap::from([(1, device)]),
+            elapsed: 0.,
+            sent: vec![],
+        };
+        let mut outputs = Outputs::new();
+        outputs
+            .update(&mut sink, 0.5, &json!({}), 10., false)
+            .unwrap();
+        outputs
+            .update(&mut sink, 0.8, &json!({}), 10.3, false)
+            .unwrap();
+        assert_eq!(sink.sent.len(), 1, "message gap starts after completion");
+        outputs
+            .update(&mut sink, 0.8, &json!({}), 10.46, false)
+            .unwrap();
+        assert_eq!(sink.sent.len(), 2);
+        // Device 1 consumes 200 ms before device 2 stops. Its StopDevice
+        // and scalar zero consume another 400 ms, so the latter's gap must
+        // begin at tick+600 ms rather than tick+400 ms.
+        let devices = (1..=2).map(|index| (index, json!({"DeviceIndex":index,"DeviceName":format!("fixture{index}"),"DeviceMessageTimingGap":250,"DeviceMessages":{"ScalarCmd":[{"ActuatorType":"Vibrate","StepCount":20}]}}))).collect();
+        let mut sink = DelayedSink {
+            devices,
+            elapsed: 0.,
+            sent: vec![],
+        };
+        let mut outputs = Outputs::new();
+        outputs
+            .update(&mut sink, 0.5, &json!({}), 10., false)
+            .unwrap();
+        outputs
+            .update(
+                &mut sink,
+                0.8,
+                &json!({"fixture2":{"on":false}}),
+                11.,
+                false,
+            )
+            .unwrap();
+        assert!(
+            (outputs.last_send[&2] - 11.6).abs() < 1e-12,
+            "later-device stop omitted preceding work: {}",
+            outputs.last_send[&2]
+        );
+        let sent = sink.sent.len();
+        outputs
+            .update(&mut sink, 0.8, &json!({}), 11.66, false)
+            .unwrap();
+        assert_eq!(
+            sink.sent.len(),
+            sent,
+            "only 60 ms elapsed after device 2's stop"
+        );
+        outputs
+            .update(&mut sink, 0.8, &json!({}), 11.86, false)
+            .unwrap();
+        assert_eq!(sink.sent.len(), sent + 1);
     }
     #[test]
     fn disabling_a_device_stops_warm_followers_and_explicit_test_still_bypasses_off() {

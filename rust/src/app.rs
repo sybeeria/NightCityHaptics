@@ -667,13 +667,53 @@ impl App {
         }
         let settings = haptics::normalize_settings(&merged, &self.catalog);
         validate_settings_size(&settings)?;
+        let device_stops: Vec<u32> = self
+            .client
+            .as_ref()
+            .into_iter()
+            .flat_map(|client| {
+                client.devices.iter().filter_map(|(index, device)| {
+                    let patch = changes.get("devices")?;
+                    // Stop only when this request explicitly disables the policy
+                    // currently selected for this connected device, including a
+                    // legacy name key that has not yet migrated to the stable key.
+                    let key = buttplug::settings_key(device);
+                    let name = device["DeviceName"].as_str().unwrap_or("");
+                    let uses_stable = settings["devices"].get(&key).is_some();
+                    let options = if uses_stable {
+                        patch.get(&key)
+                    } else {
+                        patch.get(name)
+                    }?;
+                    (options["on"] == false).then_some(*index)
+                })
+            })
+            .collect();
         let address_changed = settings["intiface_address"] != self.settings["intiface_address"];
         if let Err(error) = write_json(&self.settings_path, &settings) {
             // An explicit Off remains effective even if its persistence failed.
             // Do not publish the other settings from this failed transaction.
+            for index in &device_stops {
+                if let Some(device) = self.client.as_ref().and_then(|c| c.devices.get(index)) {
+                    let key = buttplug::settings_key(device);
+                    let name = device["DeviceName"].as_str().unwrap_or("");
+                    let selected = if settings["devices"].get(&key).is_some() {
+                        key
+                    } else {
+                        name.to_owned()
+                    };
+                    // Keep the old device policy apart from the requested Off,
+                    // even when this request first introduces its stable key.
+                    self.settings["devices"][&selected] =
+                        buttplug::device_options(device, &self.settings["devices"]);
+                    self.settings["devices"][&selected]["on"] = json!(false);
+                }
+            }
             if stop_requested {
                 self.settings["enabled"] = json!(false);
                 self.stop_feedback();
+            } else if !device_stops.is_empty() {
+                self.stop_devices(&device_stops);
             }
             return Err(error.to_string());
         }
@@ -685,6 +725,8 @@ impl App {
             self.next_connect = 0.;
         } else if stop_requested {
             self.stop_feedback();
+        } else {
+            self.stop_devices(&device_stops);
         }
         Ok(())
     }
@@ -696,6 +738,20 @@ impl App {
             if let Err(error) = client.stop_all() {
                 self.disconnect(&format!("Connection lost while stopping: {error}"));
                 self.next_connect = buttplug::monotonic() + 1.;
+            }
+        }
+    }
+    fn stop_devices(&mut self, indices: &[u32]) {
+        for index in indices {
+            if let Some(client) = &mut self.client {
+                if let Err(error) = self
+                    .outputs
+                    .stop_device(client, *index, buttplug::monotonic())
+                {
+                    self.disconnect(&format!("Connection lost while stopping device: {error}"));
+                    self.next_connect = buttplug::monotonic() + 1.;
+                    break;
+                }
             }
         }
     }
@@ -824,11 +880,13 @@ impl App {
         // must never make an old game heartbeat appear live when output is sent.
         if let Some(client) = &mut self.client {
             let began = buttplug::monotonic();
-            let result = client.poll().and_then(|_| {
+            let deadline = began + buttplug::POLL_WORK;
+            let result = client.poll_before(deadline).and_then(|_| {
                 if client.scanning
                     && (now > self.scan_until || client.devices.len() > self.scan_count)
+                    && buttplug::monotonic() < deadline
                 {
-                    client.stop_scanning()
+                    client.stop_scanning_before(deadline)
                 } else {
                     Ok(())
                 }
@@ -1571,6 +1629,93 @@ mod tests {
             .iter()
             .any(|command| command["ScalarCmd"]["Scalars"][0]["Scalar"] == 0.5));
         assert_eq!(app.settings["enabled"], false);
+    }
+    #[test]
+    fn device_off_stops_only_its_active_test_and_allows_a_later_explicit_test() {
+        for legacy in [false, true] {
+            let (_temp, mut app) = fixture();
+            let (sent, _fail) = simulated_client(&mut app);
+            let mut other = app.client.as_ref().unwrap().devices[&0].clone();
+            other["DeviceIndex"] = json!(1);
+            other["DeviceName"] = json!("Other offline fixture");
+            app.client.as_mut().unwrap().devices.insert(1, other);
+            let device = &app.client.as_ref().unwrap().devices[&0];
+            let policy = if legacy {
+                device["DeviceName"].as_str().unwrap().to_owned()
+            } else {
+                buttplug::settings_key(device)
+            };
+            for key in ["device:0", "device:1"] {
+                app.test_device(key, 10.).unwrap();
+            }
+            app.tick(10.1).unwrap();
+            sent.lock().unwrap().clear();
+            app.save(&json!({"devices":{policy.clone():{"on":false}}}))
+                .unwrap();
+            assert!(!app.outputs.hold.contains_key(&0));
+            assert!(app.outputs.hold.contains_key(&1));
+            let commands = sent.lock().unwrap().clone();
+            assert!(commands
+                .iter()
+                .any(|command| command["StopDeviceCmd"]["DeviceIndex"] == 0));
+            assert!(commands
+                .iter()
+                .all(|command| command.get("StopAllDevices").is_none()
+                    && command["StopDeviceCmd"]["DeviceIndex"] != 1
+                    && command["ScalarCmd"]["DeviceIndex"] != 1));
+            app.tick(10.2).unwrap();
+            assert!(sent
+                .lock()
+                .unwrap()
+                .iter()
+                .all(|command| command["ScalarCmd"]["DeviceIndex"] != 0
+                    || command["ScalarCmd"]["Scalars"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .all(|scalar| scalar["Scalar"] == 0.)));
+            sent.lock().unwrap().clear();
+            app.test_device("device:0", 10.3).unwrap();
+            app.tick(10.4).unwrap();
+            assert!(positive_devices(&sent).contains(&0));
+            assert_eq!(app.settings["devices"][policy]["on"], false);
+        }
+    }
+    #[test]
+    fn device_off_remains_effective_if_persistence_or_its_stop_write_fails() {
+        let (_temp, mut app) = fixture();
+        let (sent, fail) = simulated_client(&mut app);
+        let policy = buttplug::settings_key(&app.client.as_ref().unwrap().devices[&0]);
+        app.save(&json!({"devices":{policy.clone():{"strength":0.3}}}))
+            .unwrap();
+        app.test_device("device:0", 10.).unwrap();
+        app.tick(10.1).unwrap();
+        app.settings_path = app.mod_dir.join("missing/settings.json");
+        sent.lock().unwrap().clear();
+        assert!(app
+            .save(&json!({"devices":{policy.clone():{"on":false,"strength":0.8}}}))
+            .is_err());
+        assert_eq!(app.settings["devices"][&policy]["on"], false);
+        assert_eq!(app.settings["devices"][&policy]["strength"], 0.3);
+        assert!(app.outputs.hold.is_empty());
+        assert!(sent
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|command| command["StopDeviceCmd"]["DeviceIndex"] == 0));
+        app.settings_path = app.mod_dir.join("settings.json");
+        app.save(&json!({"devices":{policy.clone():{"on":true}}}))
+            .unwrap();
+        app.test_device("device:0", 10.3).unwrap();
+        fail.store(true, Ordering::Release);
+        app.save(&json!({"devices":{policy.clone():{"on":false}}}))
+            .unwrap();
+        assert_eq!(
+            read_json(&app.settings_path).unwrap()["devices"][&policy]["on"],
+            false
+        );
+        assert!(app.client.is_none());
+        assert!(app.outputs.hold.is_empty());
     }
     #[test]
     fn master_off_retires_queued_motion_and_warm_followers_before_a_new_test() {

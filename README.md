@@ -18,7 +18,7 @@ Central is already running, it uses that.
 
 ## Install
 
-1. Extract [`NightCityHaptics-0.5.0.zip`](dist/NightCityHaptics-0.5.0.zip) into the game folder
+1. Extract [`NightCityHaptics-0.5.1.zip`](dist/NightCityHaptics-0.5.1.zip) into the game folder
    (the one with `bin` in it).
 2. Open `bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/` and run
    **`start.sh`** (Linux) or **`start.cmd`** (Windows). The control page opens in your browser.

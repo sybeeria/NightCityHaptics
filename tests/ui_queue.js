@@ -95,8 +95,60 @@ async function quitDoesNotWaitAndPreviewFlushesDebounce() {
   assert.equal(p.eval('pendingSaves.size'), 0);
 }
 
+function twoDevices(p) {
+  p.eval("S.devices=[{key:'device:1',settings_key:'saved:1',settings:{on:true,strength:1,outputs:{heat:true,vibrate:true}}},{key:'device:2',settings_key:'saved:2',settings:{on:true,strength:1,outputs:{heat:true,vibrate:true}}}]; S.settings.devices={'saved:1':{on:true,strength:1,outputs:{heat:true,vibrate:true}},'saved:2':{on:true,strength:1,outputs:{heat:true,vibrate:true}}};");
+}
+async function deviceOffRetiresOnlyItsOlderEnablesAndTests() {
+  const calls=[]; let release;
+  const p=page(async (url,options)=>{
+    calls.push([url.split('/').pop(),JSON.parse(options.body)]);
+    if(calls.length===1) await new Promise(resolve=>{release=resolve;});
+    return ok();
+  });
+  twoDevices(p);
+  const writes=[p.api('settings',{max_strength:.3}),
+    p.api('test-device',{key:'device:1'}), p.api('test-device',{key:'device:2'}),
+    p.api('settings',{devices:{'saved:1':{on:true,strength:.4},'saved:2':{on:true}}}),
+    p.api('settings',{devices:{'saved:1':{on:false}}})];
+  release(); const replies=await Promise.all(writes); await turn();
+  assert.deepEqual(calls,[['settings',{max_strength:.3}],['settings',{devices:{'saved:1':{on:false}}}],
+    ['test-device',{key:'device:2'}],['settings',{devices:{'saved:1':{strength:.4},'saved:2':{on:true}}}]]);
+  assert.equal(replies.filter(reply=>reply.canceled).length,1);
+  assert.equal(p.eval('S.settings.devices["saved:1"].on'),false);
+  assert.equal(p.eval('pendingSettings'),0);
+}
+async function channelOffCannotBeReenabledByOlderQueuedClicks() {
+  const calls=[]; let release;
+  const p=page(async (url,options)=>{
+    calls.push([url.split('/').pop(),JSON.parse(options.body)]);
+    if(calls.length===1) await new Promise(resolve=>{release=resolve;});
+    return ok();
+  });
+  twoDevices(p);
+  const writes=[p.api('settings',{max_strength:.3}),p.api('test-device',{key:'device:1'}),
+    p.api('settings',{devices:{'saved:1':{outputs:{heat:true,vibrate:false}},'saved:2':{outputs:{heat:true}}}}),
+    p.api('settings',{devices:{'saved:1':{outputs:{heat:false}}}})];
+  release(); await Promise.all(writes); await turn();
+  assert.deepEqual(calls,[['settings',{max_strength:.3}],['settings',{devices:{'saved:1':{outputs:{heat:false}}}}],
+    ['settings',{devices:{'saved:1':{outputs:{vibrate:false}},'saved:2':{outputs:{heat:true}}}}]]);
+  assert.equal(p.eval('S.settings.devices["saved:1"].outputs.heat'),false);
+  assert.equal(p.eval('pendingSettings'),0);
+}
+async function deviceIntentAfterOffStillWorks() {
+  const calls=[];
+  const p=page(async (url,options)=>{calls.push([url.split('/').pop(),JSON.parse(options.body)]);return ok();});
+  twoDevices(p);
+  await p.api('settings',{devices:{'saved:1':{on:false}}});
+  await p.api('test-device',{key:'device:1'});
+  await p.api('settings',{devices:{'saved:1':{on:true}}});
+  assert.deepEqual(calls,[['settings',{devices:{'saved:1':{on:false}}}],['test-device',{key:'device:1'}],
+    ['settings',{devices:{'saved:1':{on:true}}}]]);
+  assert.equal(p.eval('pendingSettings'),0);
+}
+
 (async () => {
-  for (const test of [offPreemptsOlderClicks, newIntentAfterOffStillWorks, failuresDoNotWedgeOrPreview, quitDoesNotWaitAndPreviewFlushesDebounce]) {
+  for (const test of [offPreemptsOlderClicks, newIntentAfterOffStillWorks, failuresDoNotWedgeOrPreview, quitDoesNotWaitAndPreviewFlushesDebounce,
+    deviceOffRetiresOnlyItsOlderEnablesAndTests, channelOffCannotBeReenabledByOlderQueuedClicks, deviceIntentAfterOffStillWorks]) {
     await test(); console.log('PASS ' + test.name);
   }
 })().catch(error => {console.error(error); process.exitCode = 1;});

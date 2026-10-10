@@ -335,15 +335,33 @@ function enqueue(path, body, changesSettings) {
   if (changesSettings) { pendingSettings++; settingsEpoch++; }
   const result = new Promise((resolve, reject) => {
     const job = {path, body, changesSettings, resolve, reject};
-    if (path === 'settings' && body.enabled === false) {
+    const stopped = new Map();
+    if (path === 'settings') for (const [key, options] of Object.entries(body.devices || {})) {
+      const outputs = Object.keys(options.outputs || {}).filter(channel => options.outputs[channel] === false);
+      if (options.on === false || outputs.length) stopped.set(key, {whole: options.on === false, outputs});
+    }
+    const masterOff = path === 'settings' && body.enabled === false;
+    if (masterOff || stopped.size) {
       // Off runs next after the request already on the wire. Older clicks must
-      // neither turn feedback back on nor start a queued device preview.
+      // not restore an output or start another preview on the stopped device.
+      const stoppedTests = new Set(stopped.keys());
+      for (const d of S?.devices || []) if (stopped.has(d.settings_key || d.key)) stoppedTests.add(d.key);
       for (let i = settingsQueue.length - 1; i >= 0; i--) {
         const previous = settingsQueue[i];
         if (previous.path === 'settings') {
-          delete previous.body.enabled;
+          if (masterOff) delete previous.body.enabled;
+          for (const [key, stop] of stopped) {
+            const options = previous.body.devices?.[key];
+            if (!options) continue;
+            if (stop.whole) delete options.on;
+            for (const channel of stop.outputs) if (options.outputs) delete options.outputs[channel];
+            if (options.outputs && !Object.keys(options.outputs).length) delete options.outputs;
+            if (!Object.keys(options).length) delete previous.body.devices[key];
+          }
+          if (previous.body.devices && !Object.keys(previous.body.devices).length) delete previous.body.devices;
           if (Object.keys(previous.body).length) continue;
-        } else if (previous.path !== 'try' && previous.path !== 'test-device') continue;
+        } else if (!(masterOff && (previous.path === 'try' || previous.path === 'test-device'))
+          && !(previous.path === 'test-device' && stoppedTests.has(previous.body?.key))) continue;
         settingsQueue.splice(i, 1);
         finishSettings(previous);
         previous.resolve({ok: true, canceled: true});
@@ -357,7 +375,8 @@ function enqueue(path, body, changesSettings) {
 }
 function api(path, body) {
   if (path === 'settings') {
-    applySettings(body || {});
+    body = body || {};
+    applySettings(body);
     return enqueue(path, body, true);
   }
   // Quit bypasses slow work so stopping the app never waits behind a preview.

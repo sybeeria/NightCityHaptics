@@ -487,6 +487,56 @@ local function fresh(configure)
   events.onInit(); frames(.1)
 end
 
+-- Feedback Pause also rejects impulses, including a pause/resume between reads.
+fresh(); mark = lastNumber(); hotkeys.nchPause()
+check(mod.IsActive() == false, "the public API reports feedback Pause as inactive")
+check(mod.Pulse(.4, 3) == false, "feedback Pause rejects external mod pulses")
+fire("ShootEvents.OnEnter", nil, nil, {executionOwner = player})
+fire("PlayerPuppet.OnHitAnimation", player, {attackComputed = {GetTotalAttackValue = function() return 50 end}})
+hotkeys.nchPause()
+check(state().paused == false and idsSince(mark) == "", "quick resume cannot expose impulses created during feedback Pause")
+fire("PlayerPuppet.OnHitAnimation", player, {attackComputed = {GetTotalAttackValue = function() return 50 end}})
+check(mod.IsActive() and idsSince(mark) == "hurt", "new impulses resume immediately after feedback Pause")
+
+-- Consecutive combo attacks can enter again without changing MeleeWeapon.
+fresh(); mark = lastNumber()
+world.psm.MeleeWeapon = ordinal("gamePSMMeleeWeapon", "ComboAttack")
+local function meleeSwing(owner)
+  local callback = hooks["MeleeAttackGenericEvents.OnEnter"]
+  if callback then callback({}, nil, {executionOwner = owner}) end
+  update(1 / 60)
+end
+meleeSwing(player)
+frames(.2)
+meleeSwing(player)
+frames(.1)
+check(idsSince(mark) == "melee,melee" and last()[3] == .7, "every combo swing emits once even when its state does not change")
+check(hooks["MeleeAttackGenericEvents.OnEnter"] ~= nil, "the shared vanilla melee attack callback is observed")
+mark = lastNumber(); world.psm.MeleeWeapon = ordinal("gamePSMMeleeWeapon", "FinalAttack")
+meleeSwing(player); frames(.1)
+check(idsSince(mark) == "melee" and last()[3] == 1, "the melee callback retains the stronger final attack without a polled duplicate")
+mark = lastNumber()
+meleeSwing(other)
+check(idsSince(mark) == "", "other execution owners cannot emit player melee swings")
+hotkeys.nchPause(); meleeSwing(player); hotkeys.nchPause(); frames(.1)
+check(idsSince(mark) == "", "a melee swing observed during feedback Pause cannot replay on resume")
+events.onOverlayOpen(); meleeSwing(player)
+events.onOverlayClose(); frames(.1)
+check(idsSince(mark) == "", "a melee swing observed behind a gameplay gate remains a baseline")
+
+-- An unavailable observer keeps the existing state-edge fallback operational.
+local normalObserve = Observe
+Observe = function(class, method, callback)
+  if class == "MeleeAttackGenericEvents" and method == "OnEnter" then error("observer unavailable") end
+  return normalObserve(class, method, callback)
+end
+hooks["MeleeAttackGenericEvents.OnEnter"] = nil; fresh(); mark = lastNumber()
+world.psm.MeleeWeapon = ordinal("gamePSMMeleeWeapon", "ComboAttack"); frames(.1)
+check(idsSince(mark) == "melee", "melee state polling remains a fallback if the callback cannot register")
+check(state().errors["hook MeleeAttackGenericEvents.OnEnter"] ~= nil, "an unavailable melee observer is visible in hook diagnostics")
+Observe = normalObserve; fresh()
+check(state().errors["hook MeleeAttackGenericEvents.OnEnter"] == nil, "melee observer registration can recover on reinitialization")
+
 for _, entry in ipairs({
     {"sq030_sex_done", "judy", false}, {"sq030_sex_done", "judyCensored", true},
     {"sq028_kerry_sex", "kerry", false}, {"sq028_kerry_sex", "kerryCensored", true},

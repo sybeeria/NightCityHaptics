@@ -78,7 +78,7 @@ class NativeAppTests(unittest.TestCase):
 
     def test_assets_catalog_previews_and_keepalive(self):
         state = self.request("GET", "/api/state", headers={"X-NCH-Catalog": "1"})[1]
-        self.assertEqual(state["version"], "0.5.0")
+        self.assertEqual(state["version"], "0.5.1")
         self.assertEqual(len(state["catalog"]["interactions"]), 47)
         self.assertTrue(state["catalog"]["previews"])
         self.assertIsNone(self.state()["catalog"])

@@ -8,52 +8,55 @@ use std::{
     time::{Duration, Instant},
 };
 
-fn running(port: u16, timeout: Duration) -> bool {
+fn instance(port: u16, timeout: Duration) -> Option<Value> {
     let deadline = Instant::now() + timeout;
     let address = SocketAddr::from(([127, 0, 0, 1], port));
     let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
-        return false;
+        return None;
     };
     let remaining = deadline.saturating_duration_since(Instant::now());
     if remaining.is_zero() {
-        return false;
+        return None;
     }
     let _ = stream.set_write_timeout(Some(remaining));
-    let request = format!(
-        "GET /api/ping HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n"
-    );
+    let request =
+        format!("GET /api/ping HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n");
     if stream.write_all(request.as_bytes()).is_err() {
-        return false;
+        return None;
     }
     let mut response = Vec::new();
     loop {
         let remaining = deadline.saturating_duration_since(Instant::now());
         if remaining.is_zero() {
-            return false;
+            return None;
         }
         if stream.set_read_timeout(Some(remaining)).is_err() {
-            return false;
+            return None;
         }
         let mut bytes = [0u8; 4096];
         let limit = bytes.len().min(65537 - response.len());
         match stream.read(&mut bytes[..limit]) {
             Ok(0) => break,
             Ok(count) => response.extend_from_slice(&bytes[..count]),
-            Err(_) => return false,
+            Err(_) => return None,
         }
         if response.len() > 65536 {
-            return false;
+            return None;
         }
     }
     let Some(boundary) = response.windows(4).position(|p| p == b"\r\n\r\n") else {
-        return false;
+        return None;
     };
     if !response.starts_with(b"HTTP/1.1 200 ") && !response.starts_with(b"HTTP/1.0 200 ") {
-        return false;
+        return None;
     }
     serde_json::from_slice::<Value>(&response[boundary + 4..])
         .ok()
-        .is_some_and(|v| v["app"] == "night-city-haptics")
+        .filter(|v| v["app"] == "night-city-haptics")
+}
+
+fn running(port: u16, timeout: Duration) -> bool {
+    instance(port, timeout).is_some()
 }
 
 /// `[--companion PATH] [--port PORT] -- <Steam command...>` -> (companion, port, index of `--`).
@@ -84,6 +87,16 @@ fn options(args: &[String]) -> Result<(PathBuf, u16, usize), i32> {
         return Err(2);
     }
     Ok((path, port, offset))
+}
+
+#[cfg(any(windows, test))]
+fn keep_waiting_for_game(seen: &mut bool, running: bool, now: Instant, deadline: Instant) -> bool {
+    if running {
+        *seen = true;
+        true
+    } else {
+        !*seen && now < deadline
+    }
 }
 
 #[cfg(unix)]
@@ -243,7 +256,7 @@ mod unix {
 /// exit while Cyberpunk2077.exe keeps running.
 #[cfg(windows)]
 mod windows {
-    use super::{options, running};
+    use super::{instance, keep_waiting_for_game, options, running};
     use std::{
         io::{Read, Write},
         net::{SocketAddr, TcpStream},
@@ -280,7 +293,11 @@ mod windows {
             let mut found = false;
             let mut more = Process32FirstW(snapshot, &mut entry) != 0;
             while more {
-                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                let len = entry
+                    .szExeFile
+                    .iter()
+                    .position(|&c| c == 0)
+                    .unwrap_or(entry.szExeFile.len());
                 if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case(GAME) {
                     found = true;
                     break;
@@ -292,15 +309,24 @@ mod windows {
         }
     }
 
-    fn quit(port: u16) {
+    fn quit(port: u16, expected_pid: u32) {
+        // Older companions have no guarded Quit contract. Require their
+        // instance identity first, then let the current server recheck it in
+        // the atomic Quit request if the port changes after this probe.
+        if instance(port, Duration::from_millis(200)).and_then(|reply| reply["pid"].as_u64())
+            != Some(expected_pid as u64)
+        {
+            return;
+        }
         let address = SocketAddr::from(([127, 0, 0, 1], port));
         let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_secs(1)) else {
             return;
         };
         let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let body = format!("{{\"expected_pid\":{expected_pid}}}");
         let request = format!(
-            "POST /api/quit HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-NCH: 1\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+            "POST /api/quit HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-NCH: 1\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()
         );
         if stream.write_all(request.as_bytes()).is_ok() {
             let _ = stream.read(&mut [0u8; 1024]);
@@ -311,7 +337,10 @@ mod windows {
         if child.try_wait().ok().flatten().is_some() {
             return;
         }
-        quit(port);
+        // The port can be rebound while our child starts or stops. The server
+        // checks this PID in the same request that stops it, so only our child
+        // can accept the supervisor's Quit.
+        quit(port, child.id());
         let deadline = Instant::now() + Duration::from_secs(10);
         while Instant::now() < deadline {
             if child.try_wait().ok().flatten().is_some() {
@@ -319,7 +348,9 @@ mod windows {
             }
             thread::sleep(Duration::from_millis(50));
         }
-        eprintln!("Night City Haptics: companion did not quit within ten seconds; stopping our child.");
+        eprintln!(
+            "Night City Haptics: companion did not quit within ten seconds; stopping our child."
+        );
         let _ = child.kill();
         let _ = child.wait();
     }
@@ -364,20 +395,38 @@ mod windows {
             }
         }
         let program = &args[offset + 1];
+        let mut seen = false;
+        let mut launched = false;
         let result = match Command::new(program).args(&args[offset + 2..]).spawn() {
-            Ok(mut game) => match game.wait() {
-                Ok(status) => status.code().unwrap_or(1),
-                Err(e) => {
-                    eprintln!("Cannot wait for Steam command: {e}");
-                    1
+            Ok(mut game) => {
+                launched = true;
+                loop {
+                    // A launcher may wait until its game has already ended.
+                    // Observe during that wait so we do not start a new,
+                    // unnecessary handover timeout after the launcher exits.
+                    if companion.is_some() && game_running() {
+                        seen = true;
+                    }
+                    match game.try_wait() {
+                        Ok(Some(status)) => break status.code().unwrap_or(1),
+                        Err(e) => {
+                            eprintln!("Cannot wait for Steam command: {e}");
+                            break 1;
+                        }
+                        _ => thread::sleep(Duration::from_millis(100)),
+                    }
                 }
-            },
+            }
             Err(e) => {
                 eprintln!("Night City Haptics: could not start Steam's command: {e}");
-                if e.kind() == std::io::ErrorKind::NotFound { 127 } else { 126 }
+                if e.kind() == std::io::ErrorKind::NotFound {
+                    127
+                } else {
+                    126
+                }
             }
         };
-        if companion.is_some() {
+        if companion.is_some() && launched {
             // A launcher may exit before or after starting the game: keep the companion while
             // Cyberpunk2077.exe runs, and give a launcher time to hand over first.
             let direct = Path::new(program)
@@ -385,14 +434,8 @@ mod windows {
                 .map(|n| n.to_string_lossy().eq_ignore_ascii_case(GAME))
                 .unwrap_or(false);
             let handover = Instant::now() + if direct { Duration::ZERO } else { HANDOVER };
-            let mut seen = false;
-            loop {
-                if game_running() {
-                    seen = true;
-                } else if seen || Instant::now() >= handover {
-                    break;
-                }
-                thread::sleep(Duration::from_secs(1));
+            while keep_waiting_for_game(&mut seen, game_running(), Instant::now(), handover) {
+                thread::sleep(Duration::from_millis(100));
             }
         }
         if let Some(mut child) = companion {
@@ -421,21 +464,64 @@ pub fn main_cli(args: &[String]) -> i32 {
 
 #[cfg(test)]
 mod tests {
-    use super::options;
+    use super::{keep_waiting_for_game, options};
+    use std::time::{Duration, Instant};
     fn args(list: &[&str]) -> Vec<String> {
         list.iter().map(|s| s.to_string()).collect()
     }
     #[test]
     fn options_take_companion_port_and_steam_command() {
-        let (path, port, offset) =
-            options(&args(&["--companion", "c", "--port", "19991", "--", "game", "-x"])).unwrap();
+        let (path, port, offset) = options(&args(&[
+            "--companion",
+            "c",
+            "--port",
+            "19991",
+            "--",
+            "game",
+            "-x",
+        ]))
+        .unwrap();
         assert_eq!((path.to_str(), port, offset), (Some("c"), 19991, 4));
         assert_eq!(options(&args(&["--", "game"])).unwrap().1, 19870);
     }
     #[test]
     fn options_reject_missing_command_bad_port_and_unknown_flags() {
-        for bad in [&["--"][..], &["game"], &["--port", "0", "--", "g"], &["--port"], &["--what", "x", "--", "g"]] {
+        for bad in [
+            &["--"][..],
+            &["game"],
+            &["--port", "0", "--", "g"],
+            &["--port"],
+            &["--what", "x", "--", "g"],
+        ] {
             assert_eq!(options(&args(bad)).err(), Some(2), "{bad:?}");
         }
+    }
+    #[test]
+    fn completed_game_does_not_restart_launcher_handover_window() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(60);
+        let mut seen_during_launcher = true;
+        assert!(!keep_waiting_for_game(
+            &mut seen_during_launcher,
+            false,
+            now,
+            deadline
+        ));
+    }
+    #[test]
+    fn launcher_handover_waits_for_late_game_then_stops_when_it_finishes() {
+        let now = Instant::now();
+        let deadline = now + Duration::from_secs(60);
+        let mut seen = false;
+        assert!(keep_waiting_for_game(&mut seen, false, now, deadline));
+        assert!(keep_waiting_for_game(&mut seen, true, deadline, deadline));
+        assert!(!keep_waiting_for_game(&mut seen, false, deadline, deadline));
+        let mut never_started = false;
+        assert!(!keep_waiting_for_game(
+            &mut never_started,
+            false,
+            deadline,
+            deadline
+        ));
     }
 }

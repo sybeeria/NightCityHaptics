@@ -10,7 +10,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.5.0"
+VERSION = "0.5.1"
 MOD = Path("bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics")
 REQUIRED = {"init.lua", "companion/night-city-haptics", "companion/night-city-haptics.exe",
             "companion/catalog.json", "companion/ui.html", "companion/start.sh", "companion/start.cmd",
@@ -54,7 +54,11 @@ def main(argv=None):
                 files[rel.as_posix()] = hashlib.sha256(destination.read_bytes()).hexdigest()
         for rel, source_rel in ROOT_FILES.items():
             source = ROOT / source_rel
-            if not source.is_file() or source.is_symlink():
+            ancestors, current = [], ROOT
+            for part in source.relative_to(ROOT).parts:
+                current = current / part
+                ancestors.append(current)
+            if not source.is_file() or any(path.is_symlink() for path in ancestors):
                 raise RuntimeError(f"Missing or symlinked payload: {source_rel}")
             shutil.copy2(source, staging / rel)
             files[rel] = hashlib.sha256((staging / rel).read_bytes()).hexdigest()

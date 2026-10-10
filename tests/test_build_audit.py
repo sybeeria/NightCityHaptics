@@ -86,6 +86,15 @@ class BuildTests(unittest.TestCase):
             self.build()
         self.assertFalse((self.dist / f"NightCityHaptics-{builder.VERSION}.zip").exists())
 
+    def test_game_root_payload_rejects_symlinked_source_ancestors(self):
+        tools = self.root / "tools"
+        real_tools = self.root / "outside-tools"
+        tools.rename(real_tools)
+        tools.symlink_to(real_tools, target_is_directory=True)
+        with self.assertRaisesRegex(RuntimeError, "symlinked"):
+            self.build()
+        self.assertFalse((self.dist / f"NightCityHaptics-{builder.VERSION}.zip").exists())
+
     def test_symlinked_output_is_rejected_without_following_it(self):
         self.dist.mkdir()
         outside = self.root / "outside"

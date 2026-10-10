@@ -221,7 +221,10 @@ fn get(request: &Request, app: &SharedApp, port: u16) -> Response {
     }
     // The single-instance probe must answer even while the engine handshake is busy.
     if request.path == "/api/ping" {
-        return Response::json(200, json!({"app":"night-city-haptics","version":VERSION}));
+        return Response::json(
+            200,
+            json!({"app":"night-city-haptics","version":VERSION,"pid":std::process::id()}),
+        );
     }
     let app = app.lock().unwrap_or_else(|p| p.into_inner());
     match request.path.as_str() {
@@ -289,6 +292,11 @@ fn post(request: &Request, reader: &mut impl Read, app: &SharedApp, port: u16) -
             Ok(())
         }
         "quit" => {
+            if body.get("expected_pid").is_some()
+                && body["expected_pid"].as_u64() != Some(std::process::id() as u64)
+            {
+                return Response::error(400, "Companion instance changed; refusing to quit");
+            }
             app.stopping = true;
             Ok(())
         }
@@ -514,6 +522,63 @@ fn already_running_with_timeout(port: u16, timeout: Duration) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn instance_ping_and_owned_quit_guard_prevent_stopping_another_companion() {
+        struct Temporary(std::path::PathBuf);
+        impl Drop for Temporary {
+            fn drop(&mut self) {
+                let _ = fs::remove_dir_all(&self.0);
+            }
+        }
+        let path = std::env::temp_dir().join(format!(
+            "nch-http-ownership-{}-{}",
+            std::process::id(),
+            buttplug::monotonic().to_bits()
+        ));
+        fs::create_dir(&path).unwrap();
+        let _temporary = Temporary(path.clone());
+        let settings = path.join("settings.json");
+        fs::write(&settings, b"{\"start_intiface\":false}").unwrap();
+        let assets = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../src/companion");
+        let shared = Arc::new(Mutex::new(App::new(path, assets, Some(settings)).unwrap()));
+        let request = parse(b"GET /api/ping HTTP/1.1\r\nHost: 127.0.0.1:19879\r\n\r\n");
+        let ping: Value = serde_json::from_slice(&get(&request, &shared, 19879).body).unwrap();
+        assert_eq!(ping["pid"], std::process::id());
+        for value in [
+            json!({"expected_pid":std::process::id() as u64 + 1}),
+            json!({"expected_pid":true}),
+        ] {
+            let body = value.to_string();
+            let request = parse(format!("POST /api/quit HTTP/1.1\r\nHost: 127.0.0.1:19879\r\nX-NCH: 1\r\nContent-Length: {}\r\n\r\n",body.len()).as_bytes());
+            assert_eq!(
+                post(
+                    &request,
+                    &mut io::Cursor::new(body.as_bytes()),
+                    &shared,
+                    19879
+                )
+                .code,
+                400
+            );
+            assert!(!shared.lock().unwrap().stopping);
+        }
+        for value in [json!({"expected_pid":std::process::id()}), json!({})] {
+            shared.lock().unwrap().stopping = false;
+            let body = value.to_string();
+            let request = parse(format!("POST /api/quit HTTP/1.1\r\nHost: 127.0.0.1:19879\r\nX-NCH: 1\r\nContent-Length: {}\r\n\r\n",body.len()).as_bytes());
+            assert_eq!(
+                post(
+                    &request,
+                    &mut io::Cursor::new(body.as_bytes()),
+                    &shared,
+                    19879
+                )
+                .code,
+                200
+            );
+            assert!(shared.lock().unwrap().stopping);
+        }
+    }
     fn read_probe_request(stream: &mut TcpStream) {
         let mut request = Vec::new();
         while !request.ends_with(b"\r\n\r\n") {

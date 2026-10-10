@@ -1344,7 +1344,7 @@ mod tests {
                     &app.mod_dir.join("state.json"),
                     &json!({
                         "v":2,"session":"offline-slow-output","seq":seq,"t":20. + seq as f64 / 10.,
-                        "active":true,"paused":false,"levels":{"engine":1.},"events":[]
+                        "active":true,"paused":false,"levels":{"burning":1.},"events":[]
                     }),
                 )
                 .unwrap();

@@ -70,7 +70,7 @@ class NativeAppTests(unittest.TestCase):
         return self.request("GET", "/api/state")[1]
 
     def beat(self, seq, **changes):
-        state = {"v": 2, "session": "native-test", "seq": seq, "t": seq * .1, "active": True, "paused": False, "levels": {"engine": 1}, "events": []}
+        state = {"v": 2, "session": "native-test", "seq": seq, "t": seq * .1, "active": True, "paused": False, "levels": {"burning": 1}, "events": []}
         state.update(changes)
         temporary = self.mod / "state.json.tmp"
         temporary.write_text(json.dumps(state)); os.replace(temporary, self.mod / "state.json")
@@ -78,7 +78,7 @@ class NativeAppTests(unittest.TestCase):
 
     def test_assets_catalog_previews_and_keepalive(self):
         state = self.request("GET", "/api/state", headers={"X-NCH-Catalog": "1"})[1]
-        self.assertEqual(state["version"], "0.4.1")
+        self.assertEqual(state["version"], "0.5.0")
         self.assertEqual(len(state["catalog"]["interactions"]), 47)
         self.assertTrue(state["catalog"]["previews"])
         self.assertIsNone(self.state()["catalog"])

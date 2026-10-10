@@ -1,8 +1,9 @@
 # Night City Haptics
 
-Cyberpunk 2077 for any [Intiface](https://intiface.com)-compatible toy (18+). Gunfire kicks, hits
-thud, low health beats like a heart, engines rev, and romance and joytoy scenes get their own
-tracks. 47 interactions, each tuned live on a local control page.
+Cyberpunk 2077 for any [Intiface](https://intiface.com)-compatible toy (18+). Hits thud, low
+health beats like a heart, explosions and crashes shake, level-ups land, and romance and joytoy
+scenes get their own tracks. 47 interactions, each tuned live on a local control page. The busy
+ones (gunfire, footsteps, the engine) start off, so the big moments stand out.
 
 ![Control page](docs/screenshot.png)
 
@@ -17,7 +18,7 @@ Central is already running, it uses that.
 
 ## Install
 
-1. Extract [`NightCityHaptics-0.4.1.zip`](dist/NightCityHaptics-0.4.1.zip) into the game folder
+1. Extract [`NightCityHaptics-0.5.0.zip`](dist/NightCityHaptics-0.5.0.zip) into the game folder
    (the one with `bin` in it).
 2. Open `bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/` and run
    **`start.sh`** (Linux) or **`start.cmd`** (Windows). The control page opens in your browser.
@@ -79,47 +80,47 @@ Strength is a share of Max strength.
 
 | Group | Interaction | Default |
 |---|---|---|
-| Combat | Gunfire | 45%, Kick |
+| Combat | Gunfire | 45%, Kick, off |
 |  | Getting hit | 90%, Thud |
-|  | Low health | 60%, Heartbeat |
+|  | Low health | 70%, Heartbeat |
 |  | Explosions | 100%, Shockwave |
-|  | Melee swings | 45%, Kick |
-|  | Enemy down | 45%, Double tap |
-|  | Grabs & takedowns | 55%, Thud |
-|  | Combat starts | 35%, Alarm |
-|  | Charging up | 40%, Rumble |
-|  | Reloads | 20%, Tap |
+|  | Melee swings | 45%, Kick, off |
+|  | Enemy down | 45%, Double tap, off |
+|  | Grabs & takedowns | 70%, Thud |
+|  | Combat starts | 50%, Alarm |
+|  | Charging up | 40%, Rumble, off |
+|  | Reloads | 20%, Tap, off |
 |  | Weapon overheat | 60%, Rumble burst |
-|  | Blocks & parries | 45%, Kick |
-|  | Grenade throws | 30%, Ramp |
+|  | Blocks & parries | 45%, Kick, off |
+|  | Grenade throws | 30%, Ramp, off |
 |  | Hits landed | 20%, Tap, off |
 | Status effects | Burning | 50%, Rumble |
-|  | Electrocuted & EMP | 45%, Flutter |
-|  | Poisoned & bleeding | 30%, Throb |
-|  | Knocked down & stunned | 70%, Thud |
-|  | Blinded | 50%, Rumble burst |
-|  | Relic glitches | 50%, Glitch |
-|  | Being hacked | 40%, Static |
-| Cyberware | Sandevistan & Kerenzikov | 35%, Wave |
-|  | Berserk | 55%, Build |
-|  | Quickhack upload | 25%, Flutter |
+|  | Electrocuted & EMP | 55%, Flutter |
+|  | Poisoned & bleeding | 30%, Throb, off |
+|  | Knocked down & stunned | 85%, Thud |
+|  | Blinded | 60%, Rumble burst |
+|  | Relic glitches | 65%, Glitch |
+|  | Being hacked | 50%, Static |
+| Cyberware | Sandevistan & Kerenzikov | 45%, Wave |
+|  | Berserk | 65%, Build |
+|  | Quickhack upload | 25%, Flutter, off |
 |  | Optical camo | 20%, Wave, off |
-| Movement | Sprinting | 20%, Footsteps |
-|  | Jumps | 30%, Tap |
-|  | Landings | 55%, Thud |
-|  | Dodges & slides | 35%, Tap |
-|  | Climbs & vaults | 30%, Kick |
-|  | Out of stamina | 35%, Ripple |
+| Movement | Sprinting | 20%, Footsteps, off |
+|  | Jumps | 30%, Tap, off |
+|  | Landings | 55%, Thud, off |
+|  | Dodges & slides | 35%, Tap, off |
+|  | Climbs & vaults | 30%, Kick, off |
+|  | Out of stamina | 35%, Ripple, off |
 |  | Running out of air | 50%, Heartbeat |
-| Driving | Engine | 25%, Rumble |
+| Driving | Engine | 25%, Rumble, off |
 |  | Crashes | 100%, Shockwave |
-|  | Drifting | 45%, Rumble |
+|  | Drifting | 45%, Rumble, off |
 |  | Gear shifts | 20%, Tap, off |
 | Rewards & world | Police heat | 60%, Alarm |
-|  | Level up | 70%, Fanfare |
-|  | Quest completed | 50%, Fanfare |
-|  | Eddies received | 30%, Tap |
-|  | Healing | 35%, Swell |
+|  | Level up | 85%, Fanfare |
+|  | Quest completed | 70%, Fanfare |
+|  | Eddies received | 30%, Tap, off |
+|  | Healing | 35%, Swell, off |
 |  | Loot pickups | 15%, Tap, off |
 |  | Incoming calls | 40%, Phone ring |
 | Scenes | Romance scenes | 80%, Follow the scene |

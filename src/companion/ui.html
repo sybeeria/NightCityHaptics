@@ -252,7 +252,7 @@ footer{margin-top:48px;display:flex;flex-wrap:wrap;justify-content:space-between
     </section>
   </main>
 
-  <footer class="meta"><span>Changes save as you make them. The app keeps running until you press Quit.</span><span id="ver"></span></footer>
+  <footer class="meta"><span id="ver"></span></footer>
 </div>
 <div class="toast" id="toast" role="status"></div>
 <div class="offline" id="offline"><div><h2>Night City Haptics is not running</h2><p class="meta">Start it again with start.cmd on Windows or start.sh on Linux, in the mod’s companion folder, or with your shortcut. This page reconnects by itself.</p></div></div>
@@ -526,7 +526,8 @@ function updateDevices() {
     deviceRows.clear();
     if (!S.devices.length) list.append(el('div', {className: 'empty'},
       el('p', {className: 'name', textContent: 'No device yet'}),
-      el('p', {className: 'meta', textContent: 'Close the device’s phone app, switch the device to pairing mode, then press Scan. Any device Intiface supports works; iostindex.com lists them.'})));
+      el('p', {className: 'meta'}, 'Close the device’s phone app, switch the device to pairing mode, then press Scan. Any device Intiface supports works; ',
+        el('a', {href: 'https://iostindex.com/', target: '_blank', rel: 'noopener', textContent: 'iostindex.com'}), ' lists them.')));
     for (const d of S.devices) {
       const set = d.settings;
       const settingsKey = d.settings_key || d.key;
@@ -588,13 +589,13 @@ function status(id, state, value, detail, action) {
 function updateStatus() {
   const link = {connected: ['', 'Connected'], starting: ['wait', 'Starting'], connecting: ['wait', 'Connecting'], missing: ['bad', 'Not installed'], error: ['bad', 'Not found']}[S.link] || ['wait', S.link];
   const linkAction = S.link === 'missing' ? ['Download', () => api('download-engine')] : S.link === 'error' ? ['Retry', () => api('reconnect')] : null;
-  status('link', link[0], link[1], S.engine_download || S.link_detail, linkAction);
+  status('link', link[0], link[1], S.link === 'connected' ? '' : (S.engine_download || S.link_detail), linkAction);
   if (S.devices.length) status('dev', '', S.devices.map(d => d.name).join(', '), S.devices.length > 1 ? S.devices.length + ' devices' : '');
   else if (S.scanning) status('dev', 'wait', 'Scanning', 'Pairing mode on?');
-  else if (S.link === 'connected') status('dev', 'bad', 'None', 'Turn it on, then scan');
+  else if (S.link === 'connected') status('dev', 'bad', 'None', '');
   else status('dev', '', 'None', 'Waiting for Intiface');
   const game = {live: ['', 'Live'], idle: ['', 'Connected'], paused: ['wait', 'Paused'], offline: ['', 'Not running'], waiting: ['', 'Waiting']}[S.game] || ['', S.game];
-  status('game', game[0], game[1], S.game === 'live' ? '' : S.game_detail);
+  status('game', game[0], game[1], S.game === 'live' || S.game === 'waiting' ? '' : S.game_detail);
 
   const on = S.settings.enabled;
   $('power').textContent = on ? 'On' : 'Off';

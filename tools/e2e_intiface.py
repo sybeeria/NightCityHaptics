@@ -107,11 +107,11 @@ def inner():
             time.sleep(.2)
         result["checks"]["companion_connected"] = state.get("link") == "connected"
         result["checks"]["device_listed"] = [d["name"] for d in state.get("devices", [])]
-        # Baseline heartbeat, then live gameplay with a hit and a running engine.
+        # Baseline heartbeat, then live gameplay with a hit and a level that is on by default (burning).
         for _ in range(5):
             beat(); time.sleep(1 / 30)
         hurt_start = boundary()
-        beat(events=[[1, "hurt", 1, 50 + seq / 30]], levels={"engine": 0})
+        beat(events=[[1, "hurt", 1, 50 + seq / 30]], levels={"burning": 0})
         for _ in range(6):
             time.sleep(1 / 30); beat(events=[[1, "hurt", 1, 50]])
         time.sleep(.3)
@@ -119,7 +119,7 @@ def inner():
         result["checks"]["hurt_peak"] = max(hurt, default=0)
         engine_start = boundary()
         for _ in range(40):
-            beat(levels={"engine": 1}); time.sleep(1 / 30)
+            beat(levels={"burning": 1}); time.sleep(1 / 30)
         engine = values(engine_start)
         result["checks"]["engine_values"] = sorted(set(engine))
         heartbeat_start = boundary()

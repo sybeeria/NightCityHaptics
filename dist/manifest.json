@@ -1,18 +1,18 @@
 {
-  "version": "0.2.2",
+  "version": "0.2.3",
   "files": {
-    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/init.lua": "c58c97c01b3460b66313ae9002e8e4f82f43e1d74480b86f38d2e84cf5bca653",
-    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/buttplug.py": "6ee574150e3cde7f58752ff03dbafbad6fae0ff9e8cc34afe3af0568211adf9e",
+    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/init.lua": "4ca360b7fad038ed976b21f97c8e0f50f70da6101ee5aeac0a173c83599607b5",
+    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/buttplug.py": "a99e9f62271ad763b52688161faeb82d28f3c3c7fdc0b398ec377bd6fbe3e28b",
     "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/catalog.json": "bdd372b55fa893ce7bf23c60d46b2baec22698f9c9f552a83637f64215ebb7b0",
     "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/fonts/OFL.txt": "108b4e57c9c796d3d38d0428ca7ee39de47ad93187302718d9b2d8864b9b716b",
     "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/fonts/archivo.woff2": "8f704806dbedeaaeca334b11ec348bc3ac3a439d6431544b3afb54f534ee4967",
-    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/haptics.py": "0c784eccec445829e0f28450ab5dd42f9578cf3171891ccc64363cc7138385db",
-    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/nch.py": "8b1253f4577b4c2221527e22aa5e39fbd974a3d3841cca8deecf2db70382e88d",
+    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/haptics.py": "a35181f212fb1a23462d56109e21b4d2a8b9f87c64ac414d8fc38a6808a64f26",
+    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/nch.py": "d466db730932e02863f7582afebd91ebf41fc7e4e01fd2f40202231e9ffd623e",
     "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/start.cmd": "04a37b23be52fcb25394adf6a417218a2081571cb356f4607aad2100375acd5c",
     "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/start.sh": "8fab573ff2a2867d1a93e229ceb5d250b6325176ed9312f3c6c91904e07877ac",
-    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/ui.html": "1df08e4435357a6c7567301e55d3d2ed51d0566e7ecacb5c62d494ff7d2f7c14"
+    "bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/ui.html": "48a7c30beac31a81187c6e7682e29f18d98b98666c1713f356f9a4784eda6f52"
   },
-  "zip": "NightCityHaptics-0.2.2.zip",
-  "zip_sha256": "ec31efc5883c462382511ecd88c572f447e7e4c86c28ddd9be1376e79cc17067",
+  "zip": "NightCityHaptics-0.2.3.zip",
+  "zip_sha256": "280e4b00136390440708f9c10dd5ce1e4bd9e5b3351b439d5eea749b7a4b578c",
   "privacy_check": "No local paths/account IDs/debug artifacts in either encoding"
 }

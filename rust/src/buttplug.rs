@@ -1557,7 +1557,7 @@ impl Outputs {
         }
     }
 }
-// Python round(x, 3) rounds the exact floating-point input, not the product
+// Decimal rounding uses the exact floating-point input, not the product
 // x*1000 (which can cross a half boundary). Formatting uses the same tie rule.
 fn python_round(value: f64, places: usize) -> f64 {
     format!("{value:.places$}").parse().unwrap_or(0.)

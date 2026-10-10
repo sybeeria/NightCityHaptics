@@ -14,7 +14,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 BINARY = Path(os.environ.get('NCH_NATIVE_BINARY', ROOT / 'src/companion/night-city-haptics'))
-SPEC = importlib.util.spec_from_file_location('steam_stub_support', ROOT / 'tests/test_steam_launch.py')
+SPEC = importlib.util.spec_from_file_location('steam_stub_support', ROOT / 'tests/steam_stubs.py')
 support = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(support)
 

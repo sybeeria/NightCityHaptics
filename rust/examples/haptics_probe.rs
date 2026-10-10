@@ -1,4 +1,4 @@
-//! JSON-lines oracle adapter for differential tests; never used by the runtime.
+//! JSON-lines adapter for native mixer contract tests; never used by the runtime.
 use night_city_haptics::haptics::{self, GameLink, Mixer, Voice};
 use serde_json::{json, Value};
 use std::io::{self, BufRead};

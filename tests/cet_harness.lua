@@ -718,7 +718,7 @@ frames(.6); events.onDraw()
 check(displayed == .4, "valid status recovers after malformed snapshots")
 ImGui.ProgressBar = oldProgress; events.onOverlayClose(); frames(.1)
 
--- 0.3.0 signals: blocks, hits landed, grenades, climbing, stamina, netrunner uploads,
+-- Gameplay signals: blocks, hits landed, grenades, climbing, stamina, netrunner uploads,
 -- melee charge, charged-shot kick, revs and being hit by a car.
 fresh()
 fire("PlayerPuppet.OnHitBlockedOrDeflected", player, {attackData = {WasDeflectedAny = function() return true end}})

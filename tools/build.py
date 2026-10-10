@@ -54,8 +54,6 @@ def main(argv=None):
         required = {(MOD / rel).as_posix() for rel in REQUIRED}
         if not required <= files.keys():
             raise RuntimeError("Payload is missing required files: " + ", ".join(sorted(required - files.keys())))
-        if any("/bridge/" in rel or rel.endswith("core.lua") for rel in files):
-            raise RuntimeError("Payload contains stale 0.1.0 files")
         leaked = []
         for rel in files:
             data = (staging / rel).read_bytes()

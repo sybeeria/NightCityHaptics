@@ -55,7 +55,7 @@ pub fn clamp_range(value: &Value, low: f64, high: f64) -> f64 {
     number.map_or(low, |number| clamp_num_range(number, low, high))
 }
 
-// Python's float(string) accepts Unicode decimal digits in saved numeric
+// Saved numeric settings accept Unicode decimal digits in numeric
 // strings. Convert the ten-digit Nd blocks before applying its underscore rule.
 fn decimal_digit(ch: char) -> char {
     const STARTS: &[u32] = &[

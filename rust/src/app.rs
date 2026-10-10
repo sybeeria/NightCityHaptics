@@ -1061,7 +1061,7 @@ impl App {
 
 fn rounded(number: f64, digits: usize) -> f64 {
     // Decimal formatting rounds the original binary float. Multiplication by
-    // 10^digits can erase the small error that Python's round() preserves.
+    // 10^digits can erase the small error in the original binary floating-point value.
     format!("{number:.digits$}").parse().unwrap_or(0.)
 }
 

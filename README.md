@@ -11,8 +11,7 @@ you tune live on a local control page.
 
 - Cyberpunk 2077 on PC (Windows, or Linux / SteamOS through Proton) with
   [Cyber Engine Tweaks](https://www.nexusmods.com/cyberpunk2077/mods/107).
-- Python 3.9 or newer ([python.org](https://www.python.org/downloads/) on Windows). The app
-  needs no other packages.
+- The native companion for 64-bit Windows or x86-64 Linux / SteamOS.
 - A device with **Buttplug.io Support** in the [compatible-device index](https://iostindex.com/).
 
 You don't need to install Intiface. The app downloads the official Intiface Engine once,
@@ -21,16 +20,18 @@ app uses that instead.
 
 ## Setup
 
-1. Download [`NightCityHaptics-0.3.0.zip`](dist/NightCityHaptics-0.3.0.zip) and extract it
-   into the game folder (the one that contains `bin`).
+1. Download the current candidate [`NightCityHaptics-0.4.0.zip`](dist/NightCityHaptics-0.4.0.zip)
+   and extract it into the game folder (the one that contains `bin`). A GitHub release has
+   not been published yet.
 2. In `bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/`, run **`start.cmd`**
-   (Windows) or **`start.sh`** (Linux). The control page opens in your browser.
+   (Windows) or **`start.sh`** (Linux). These launch `night-city-haptics.exe` or
+   `night-city-haptics`; the control page opens in your browser.
 3. On first run, click **Download engine** in Settings. Then put your device in pairing mode.
 4. Play. Feedback runs only during live gameplay, not in menus, loading screens, photo mode or
    the CET overlay.
 
 **Optional, Steam on Linux/SteamOS:** to start the app with the game, save
-[nch-steam-launch](https://raw.githubusercontent.com/sybeeria/NightCityHaptics/v0.3.0/tools/nch-steam-launch)
+[nch-steam-launch](https://raw.githubusercontent.com/sybeeria/NightCityHaptics/main/tools/nch-steam-launch)
 in the game folder and set the game's Launch Options to:
 
 ```sh
@@ -135,8 +136,9 @@ Strength is a share of Max strength.
 ## Troubleshooting
 
 - **Device not found:** close its phone app, then press **Scan**. On Linux, turn Bluetooth on.
-- **`start.cmd` says Python is missing:** install it from python.org with the "py launcher"
-  option ticked.
+- **Companion missing:** check that `night-city-haptics.exe` (Windows) or `night-city-haptics`
+  (Linux) is next to the start script. Build both native companions before making the ZIP.
+- **Linux permission denied:** run `chmod +x start.sh night-city-haptics` in the companion folder.
 - **Logs:** `%LOCALAPPDATA%\NightCityHaptics\` (Windows) or `~/.local/share/night-city-haptics/`
   (Linux).
 
@@ -158,22 +160,33 @@ GetMod("nightCityHaptics").Pulse(0.8, 2)   -- strength 0–1, optional seconds
 
 The current source is the unreleased 0.4.0 Rust companion. The CET mod writes `state.json`; the
 native companion mixes device output over the Buttplug protocol and stops when the game's heartbeat
-does. Rust is required to build it; Python and `websockets` are used for tooling and reference tests.
+does. Python is used for build and integration-test tooling only; the app runs as a native executable.
+
+To build the Windows and Linux candidate ZIP from Linux, install Rust, a C compiler/linker,
+`clang`/`lld` and Python 3, then run:
+
+```sh
+rustup target add x86_64-unknown-linux-gnu x86_64-pc-windows-msvc
+cargo install cargo-xwin --locked
+python3 tools/build_native.py                       # builds both native companions
+python3 tools/build.py --output-dir .build/candidate
+```
+
+The build writes the native companions into `src/companion/` and the installable ZIP into
+`.build/candidate/`. To run the checks, install LuaJIT and `websockets` for the Python test tools:
 
 ```sh
 luajit tests/cet_harness.lua
 cargo test --manifest-path rust/Cargo.toml
 cargo build --manifest-path rust/Cargo.toml --examples
-python3 tools/build_native.py                       # Linux + Windows (cargo-xwin required)
 python3 -m pip install 'websockets>=15,<17'          # tests only
 python3 -m unittest discover -s tests
-python3 tools/build.py --output-dir .build/candidate
 python3 tools/e2e_intiface.py                        # Linux: real Intiface Engine + simulated device
 ```
 
 ## Status
 
-Latest release: 0.3.0. Current source: 0.4.0 (unreleased), with native Windows and Linux companions.
+Version 0.4.0 (unreleased), with native Windows and Linux companions.
 Gameplay, scene timing, physical devices and Windows runtime still need playtesting.
 
 Built on [Buttplug / Intiface](https://buttplug.io) by Nonpolynomial.

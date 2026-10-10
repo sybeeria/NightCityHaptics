@@ -13,7 +13,8 @@ effects. Each one has its own switch, feel and strength, tuned live from a local
   [Cyber Engine Tweaks](https://www.nexusmods.com/cyberpunk2077/mods/107).
 - Python 3.9 or newer. On Windows, get it from
   [python.org](https://www.python.org/downloads/). The app needs no other packages.
-- A device that Intiface supports. Check yours on [iostindex.com](https://iostindex.com).
+- An Intiface-compatible device. See the [compatible-device index](https://iostindex.com/)
+  and check **Buttplug.io Support**.
 
 You don't need to install or start Intiface separately. The app downloads the official Intiface
 Engine once and verifies its checksum. After that it starts the engine by itself. If you already
@@ -166,7 +167,7 @@ Download engine. If you set a remote Intiface address, the app connects to that 
 Other CET mods can send a pulse through the **Other mods** interaction:
 
 ```lua
-GetMod("nightCityHaptics").Pulse(0.8, 2)   -- strength 0–1, seconds (optional)
+GetMod("nightCityHaptics").Pulse(0.8, 2)   -- strength 0–1, positive seconds (optional)
 ```
 
 ## How it works
@@ -195,15 +196,13 @@ Intiface Engine, `unshare`, `ip`, and working user/network namespaces.
 luajit tests/cet_harness.lua                  # the real init.lua against a stubbed CET + game
 python3 -m pip install 'websockets>=15,<17'     # tests only; no extra runtime packages
 python3 -m unittest discover -s tests
-python3 tools/build.py                        # builds dist/ (game-relative ZIP + manifest)
+python3 tools/build.py --output-dir .build/candidate  # game-relative ZIP + manifest
 python3 tools/e2e_intiface.py                 # Linux: real Intiface Engine + simulated device
 ```
 
 ## Status
 
-This is a prototype (0.2.4). The current functionality passed offline tests and an end-to-end run
-through the real Intiface Engine with a simulated device. The added signals and scene timing
-have not yet been playtested in-game, and physical feedback remains unverified. Please open an
-issue if something misfires.
+Prototype (0.2.4). Latest fixes are in source; the packaged ZIP is the earlier build.
+Gameplay, scene timing and physical feedback still need playtesting.
 
 Built on [Buttplug / Intiface](https://buttplug.io) by Nonpolynomial.

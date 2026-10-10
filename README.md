@@ -23,17 +23,24 @@ Central is already running, it uses that.
    **`start.sh`** (Linux) or **`start.cmd`** (Windows). The control page opens in your browser.
 3. Click **Download** next to Intiface at the top of the page. The engine starts and scans for
    30 seconds, so turn your toy on. It shows up under Devices.
-4. **Linux / SteamOS:** in Steam, open Cyberpunk 2077 → Properties → Launch Options and enter:
+4. In Steam, open Cyberpunk 2077 → Properties → Launch Options and enter the line for your
+   system. From then on the app starts with the game and closes with it.
+
+   **Linux / SteamOS:**
 
    ```sh
    /bin/sh "/home/deck/.local/share/Steam/steamapps/common/Cyberpunk 2077/nch-steam-launch" -- %command%
    ```
 
-   Change the path if your game is elsewhere (Steam → Manage → Browse local files). From now
-   on the app starts with the game and closes with it. Already have launch options? `VAR=value`
-   settings go first, other wrappers after `--`, game flags after `%command%`.
+   **Windows:**
 
-   **Windows:** run `start.cmd` before you play.
+   ```bat
+   "C:\Program Files (x86)\Steam\steamapps\common\Cyberpunk 2077\bin\x64\plugins\cyber_engine_tweaks\mods\nightCityHaptics\companion\night-city-haptics.exe" --steam -- %command%
+   ```
+
+   Change the path if your game is elsewhere (Steam → Manage → Browse local files). Already have
+   launch options? Other wrappers go after `--`, game flags after `%command%`, and on Linux
+   `VAR=value` settings go first.
 
 The page stays at http://127.0.0.1:19870/ while the app runs. Feedback plays only in live
 gameplay, not in menus, loading screens, photo mode or the CET overlay.

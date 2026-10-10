@@ -1,13 +1,97 @@
 //! Steam lifecycle helper. Only a companion started here is stopped here.
+use serde_json::Value;
+use std::{
+    env,
+    io::{Read, Write},
+    net::{SocketAddr, TcpStream},
+    path::PathBuf,
+    time::{Duration, Instant},
+};
+
+fn running(port: u16, timeout: Duration) -> bool {
+    let deadline = Instant::now() + timeout;
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
+        return false;
+    };
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        return false;
+    }
+    let _ = stream.set_write_timeout(Some(remaining));
+    let request = format!(
+        "GET /api/ping HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n"
+    );
+    if stream.write_all(request.as_bytes()).is_err() {
+        return false;
+    }
+    let mut response = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        if stream.set_read_timeout(Some(remaining)).is_err() {
+            return false;
+        }
+        let mut bytes = [0u8; 4096];
+        let limit = bytes.len().min(65537 - response.len());
+        match stream.read(&mut bytes[..limit]) {
+            Ok(0) => break,
+            Ok(count) => response.extend_from_slice(&bytes[..count]),
+            Err(_) => return false,
+        }
+        if response.len() > 65536 {
+            return false;
+        }
+    }
+    let Some(boundary) = response.windows(4).position(|p| p == b"\r\n\r\n") else {
+        return false;
+    };
+    if !response.starts_with(b"HTTP/1.1 200 ") && !response.starts_with(b"HTTP/1.0 200 ") {
+        return false;
+    }
+    serde_json::from_slice::<Value>(&response[boundary + 4..])
+        .ok()
+        .is_some_and(|v| v["app"] == "night-city-haptics")
+}
+
+/// `[--companion PATH] [--port PORT] -- <Steam command...>` -> (companion, port, index of `--`).
+fn options(args: &[String]) -> Result<(PathBuf, u16, usize), i32> {
+    let mut path = env::current_exe().unwrap_or_else(|_| PathBuf::from("night-city-haptics"));
+    let mut port = 19870;
+    let mut offset = 0;
+    while offset < args.len() && args[offset] != "--" {
+        if offset + 1 >= args.len() {
+            eprintln!("Expected a value before Steam's -- command");
+            return Err(2);
+        }
+        match args[offset].as_str() {
+            "--companion" => path = PathBuf::from(&args[offset + 1]),
+            "--port" => match args[offset + 1].parse::<u16>() {
+                Ok(p) if p > 0 => port = p,
+                _ => return Err(2),
+            },
+            _ => {
+                eprintln!("Unknown Steam launcher option: {}", args[offset]);
+                return Err(2);
+            }
+        }
+        offset += 2;
+    }
+    if args.get(offset).map(String::as_str) != Some("--") || offset + 1 == args.len() {
+        eprintln!("Supply Steam's command after --");
+        return Err(2);
+    }
+    Ok((path, port, offset))
+}
+
 #[cfg(unix)]
 mod unix {
-    use serde_json::Value;
+    use super::{options, running};
     use std::{
         env,
-        io::{Read, Write},
-        net::{SocketAddr, TcpStream},
         os::unix::process::CommandExt,
-        path::PathBuf,
         process::{Child, Command, Stdio},
         sync::{
             atomic::{AtomicUsize, Ordering},
@@ -17,53 +101,6 @@ mod unix {
         time::{Duration, Instant},
     };
 
-    fn running(port: u16, timeout: Duration) -> bool {
-        let deadline = Instant::now() + timeout;
-        let address = SocketAddr::from(([127, 0, 0, 1], port));
-        let Ok(mut stream) = TcpStream::connect_timeout(&address, timeout) else {
-            return false;
-        };
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            return false;
-        }
-        let _ = stream.set_write_timeout(Some(remaining));
-        let request = format!(
-            "GET /api/ping HTTP/1.1\r\nHost: localhost:{port}\r\nConnection: close\r\n\r\n"
-        );
-        if stream.write_all(request.as_bytes()).is_err() {
-            return false;
-        }
-        let mut response = Vec::new();
-        loop {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            if remaining.is_zero() {
-                return false;
-            }
-            if stream.set_read_timeout(Some(remaining)).is_err() {
-                return false;
-            }
-            let mut bytes = [0u8; 4096];
-            let limit = bytes.len().min(65537 - response.len());
-            match stream.read(&mut bytes[..limit]) {
-                Ok(0) => break,
-                Ok(count) => response.extend_from_slice(&bytes[..count]),
-                Err(_) => return false,
-            }
-            if response.len() > 65536 {
-                return false;
-            }
-        }
-        let Some(boundary) = response.windows(4).position(|p| p == b"\r\n\r\n") else {
-            return false;
-        };
-        if !response.starts_with(b"HTTP/1.1 200 ") && !response.starts_with(b"HTTP/1.0 200 ") {
-            return false;
-        }
-        serde_json::from_slice::<Value>(&response[boundary + 4..])
-            .ok()
-            .is_some_and(|v| v["app"] == "night-city-haptics")
-    }
     fn stop(child: &mut Child) {
         if child.try_wait().ok().flatten().is_some() {
             return;
@@ -85,31 +122,10 @@ mod unix {
         let _ = child.wait();
     }
     pub fn run(args: &[String]) -> i32 {
-        let mut path = env::current_exe().unwrap_or_else(|_| PathBuf::from("night-city-haptics"));
-        let mut port = 19870;
-        let mut offset = 0;
-        while offset < args.len() && args[offset] != "--" {
-            if offset + 1 >= args.len() {
-                eprintln!("Expected a value before Steam's -- command");
-                return 2;
-            }
-            match args[offset].as_str() {
-                "--companion" => path = PathBuf::from(&args[offset + 1]),
-                "--port" => match args[offset + 1].parse::<u16>() {
-                    Ok(p) if p > 0 => port = p,
-                    _ => return 2,
-                },
-                _ => {
-                    eprintln!("Unknown Steam launcher option: {}", args[offset]);
-                    return 2;
-                }
-            }
-            offset += 2;
-        }
-        if args.get(offset).map(String::as_str) != Some("--") || offset + 1 == args.len() {
-            eprintln!("Supply Steam's command after --");
-            return 2;
-        }
+        let (path, port, offset) = match options(args) {
+            Ok(parsed) => parsed,
+            Err(code) => return code,
+        };
         let interrupted = Arc::new(AtomicUsize::new(0));
         let signal_events = Arc::new(AtomicUsize::new(0));
         let mut handlers = Vec::new();
@@ -221,15 +237,205 @@ mod unix {
         result
     }
 }
+/// Windows: Steam runs `night-city-haptics.exe --steam -- %command%`. There are no signals or
+/// process groups, so the companion is asked to quit over its own API (stopping toys and the
+/// engine it started), and the game is tracked by process name because CDPR's launcher can
+/// exit while Cyberpunk2077.exe keeps running.
+#[cfg(windows)]
+mod windows {
+    use super::{options, running};
+    use std::{
+        io::{Read, Write},
+        net::{SocketAddr, TcpStream},
+        os::windows::process::CommandExt,
+        path::Path,
+        process::{Child, Command, Stdio},
+        thread,
+        time::{Duration, Instant},
+    };
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+        System::{
+            Console::FreeConsole,
+            Diagnostics::ToolHelp::{
+                CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+                TH32CS_SNAPPROCESS,
+            },
+        },
+    };
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    const GAME: &str = "Cyberpunk2077.exe";
+    /// How long a launcher may take to hand over to the game after it exits.
+    const HANDOVER: Duration = Duration::from_secs(60);
+
+    fn game_running() -> bool {
+        unsafe {
+            let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+            if snapshot == INVALID_HANDLE_VALUE {
+                return false;
+            }
+            let mut entry: PROCESSENTRY32W = std::mem::zeroed();
+            entry.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+            let mut found = false;
+            let mut more = Process32FirstW(snapshot, &mut entry) != 0;
+            while more {
+                let len = entry.szExeFile.iter().position(|&c| c == 0).unwrap_or(entry.szExeFile.len());
+                if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case(GAME) {
+                    found = true;
+                    break;
+                }
+                more = Process32NextW(snapshot, &mut entry) != 0;
+            }
+            CloseHandle(snapshot);
+            found
+        }
+    }
+
+    fn quit(port: u16) {
+        let address = SocketAddr::from(([127, 0, 0, 1], port));
+        let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_secs(1)) else {
+            return;
+        };
+        let _ = stream.set_write_timeout(Some(Duration::from_secs(2)));
+        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+        let request = format!(
+            "POST /api/quit HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nX-NCH: 1\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{{}}"
+        );
+        if stream.write_all(request.as_bytes()).is_ok() {
+            let _ = stream.read(&mut [0u8; 1024]);
+        }
+    }
+
+    fn stop(child: &mut Child, port: u16) {
+        if child.try_wait().ok().flatten().is_some() {
+            return;
+        }
+        quit(port);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while Instant::now() < deadline {
+            if child.try_wait().ok().flatten().is_some() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        eprintln!("Night City Haptics: companion did not quit within ten seconds; stopping our child.");
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+
+    pub fn run(args: &[String]) -> i32 {
+        // Steam starts this console binary from a GUI; drop the console window it gets.
+        unsafe {
+            FreeConsole();
+        }
+        let (path, port, offset) = match options(args) {
+            Ok(parsed) => parsed,
+            Err(code) => return code,
+        };
+        let mut companion = None;
+        if !running(port, Duration::from_millis(200)) {
+            let mut command = Command::new(&path);
+            command.args(["--no-browser", "--port", &port.to_string()]);
+            if let Some(mod_dir) = path.parent().and_then(|p| p.parent()) {
+                command.arg("--mod-dir").arg(mod_dir);
+            }
+            command
+                .creation_flags(CREATE_NO_WINDOW)
+                .stdin(Stdio::null())
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
+            match command.spawn() {
+                Ok(mut child) => {
+                    let deadline = Instant::now() + Duration::from_secs(2);
+                    loop {
+                        if child.try_wait().ok().flatten().is_some() {
+                            break;
+                        }
+                        let remaining = deadline.saturating_duration_since(Instant::now());
+                        if remaining.is_zero() || running(port, Duration::from_millis(200).min(remaining)) {
+                            companion = Some(child);
+                            break;
+                        }
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                }
+                Err(e) => eprintln!("Night City Haptics: could not start the companion ({e}); continuing with the game."),
+            }
+        }
+        let program = &args[offset + 1];
+        let result = match Command::new(program).args(&args[offset + 2..]).spawn() {
+            Ok(mut game) => match game.wait() {
+                Ok(status) => status.code().unwrap_or(1),
+                Err(e) => {
+                    eprintln!("Cannot wait for Steam command: {e}");
+                    1
+                }
+            },
+            Err(e) => {
+                eprintln!("Night City Haptics: could not start Steam's command: {e}");
+                if e.kind() == std::io::ErrorKind::NotFound { 127 } else { 126 }
+            }
+        };
+        if companion.is_some() {
+            // A launcher may exit before or after starting the game: keep the companion while
+            // Cyberpunk2077.exe runs, and give a launcher time to hand over first.
+            let direct = Path::new(program)
+                .file_name()
+                .map(|n| n.to_string_lossy().eq_ignore_ascii_case(GAME))
+                .unwrap_or(false);
+            let handover = Instant::now() + if direct { Duration::ZERO } else { HANDOVER };
+            let mut seen = false;
+            loop {
+                if game_running() {
+                    seen = true;
+                } else if seen || Instant::now() >= handover {
+                    break;
+                }
+                thread::sleep(Duration::from_secs(1));
+            }
+        }
+        if let Some(mut child) = companion {
+            stop(&mut child, port);
+        }
+        result
+    }
+}
+
 pub fn main_cli(args: &[String]) -> i32 {
     #[cfg(unix)]
     {
         unix::run(args)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows::run(args)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = args;
-        eprintln!("Steam lifecycle helper requires Linux/SteamOS");
+        eprintln!("Steam lifecycle helper requires Linux/SteamOS or Windows");
         2
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::options;
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|s| s.to_string()).collect()
+    }
+    #[test]
+    fn options_take_companion_port_and_steam_command() {
+        let (path, port, offset) =
+            options(&args(&["--companion", "c", "--port", "19991", "--", "game", "-x"])).unwrap();
+        assert_eq!((path.to_str(), port, offset), (Some("c"), 19991, 4));
+        assert_eq!(options(&args(&["--", "game"])).unwrap().1, 19870);
+    }
+    #[test]
+    fn options_reject_missing_command_bad_port_and_unknown_flags() {
+        for bad in [&["--"][..], &["game"], &["--port", "0", "--", "g"], &["--port"], &["--what", "x", "--", "g"]] {
+            assert_eq!(options(&args(bad)).err(), Some(2), "{bad:?}");
+        }
     }
 }

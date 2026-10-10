@@ -34,7 +34,7 @@ sys.path.insert(0, str(HERE))
 import buttplug  # noqa: E402
 import haptics  # noqa: E402
 
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 PORT = 19870
 TICK = 1 / 30
 IDLE_TICK = 1 / 10   # while no game heartbeat is live and nothing plays

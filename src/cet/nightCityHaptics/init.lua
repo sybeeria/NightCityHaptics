@@ -1,4 +1,4 @@
--- Night City Haptics 0.2.3 (CET part)
+-- Night City Haptics 0.2.4 (CET part)
 -- Reports what happens in the game to the Night City Haptics companion app by
 -- sampling about 30 times a second and writing state.json on changes/events or
 -- at a quiet 5 Hz heartbeat. The companion owns
@@ -23,7 +23,7 @@
 -- levelupNotification.script:162 (Espionage notification converts its level to a delta);
 -- core/systems/timeSystem.script:19, core/data/engineTime.script:6 (scene simulation clock).
 -- Scene facts and timings checked against current vanilla .scene files.
-local mod = {version = "0.2.3"}
+local mod = {version = "0.2.4"}
 local R = {
   session = "", seq = 0, clock = 0, sampleClock = 0, writeClock = 0, overlay = false,
   loading = false, paused = false, shutdown = false, active = false, reason = "starting",

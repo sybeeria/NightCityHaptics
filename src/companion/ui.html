@@ -3,19 +3,36 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Night City Haptics</title>
+<script>
+// Set the palette before the page can paint; storage may be unavailable.
+const themeMedia = window.matchMedia('(prefers-color-scheme: dark)');
+let themePreference = null;
+try {
+  const saved = localStorage.getItem('nch-theme');
+  if (saved === 'light' || saved === 'dark') themePreference = saved;
+} catch (e) {}
+document.documentElement.dataset.theme = themePreference || (themeMedia.matches ? 'dark' : 'light');
+</script>
 <style>
 /* Archivo, SIL Open Font License 1.1: fonts/OFL.txt */
 @font-face{font-family:"Archivo";src:url("/fonts/archivo.woff2") format("woff2");font-weight:400 900;font-display:swap}
 /* Paper, black, graphite, rule, signal red. Red only means: on, live, the limit, or a problem. */
 :root{
-  --ink:#000;--paper:#fff;--grey:#5c5c5c;--faint:#8c8c8c;--rule:#dadada;--red:#e10600;--red-dark:#b30500;
+  --ink:#000;--paper:#fff;--grey:#5c5c5c;--faint:#767676;--rule:#dadada;--red:#e10600;--red-dark:#b30500;
+  --red-solid:var(--red);--overlay:rgba(255,255,255,.96);
   --font:"Archivo","Helvetica Neue",Arial,sans-serif;
   color-scheme:light;
 }
+:root[data-theme=dark]{
+  --ink:#f6f6f6;--paper:#111;--grey:#b3b3b3;--faint:#989898;--rule:#454545;--red:#ff625b;
+  --red-solid:#d71913;--overlay:rgba(17,17,17,.96);
+  color-scheme:dark;
+}
 *{box-sizing:border-box}
 html{background:var(--paper)}
-body{margin:0;color:var(--ink);font:16px/1.4 var(--font);min-height:100vh}
+body{margin:0;background:var(--paper);color:var(--ink);font:16px/1.4 var(--font);min-height:100vh}
 button,select,input{font:inherit;color:inherit}
 h1,h2,h3,p{margin:0}
 a{color:var(--ink)}
@@ -43,15 +60,17 @@ a{color:var(--ink)}
 .status .bad .v{color:var(--red)}
 .status .wait .v{animation:blink 1.3s ease-in-out infinite}
 @keyframes blink{50%{opacity:.35}}
-.actions{display:flex;gap:8px}
+.actions{display:flex;flex-wrap:wrap;gap:8px}
 
 /* buttons: pill (action), pill.on (a state that is on), link (quiet text action) */
 .pill{background:var(--paper);border:2px solid var(--ink);border-radius:999px;padding:9px 18px;min-height:44px;font-weight:700;cursor:pointer;white-space:nowrap}
 .pill:hover{border-color:var(--red);color:var(--red)}
-.pill.on{background:var(--red);border-color:var(--red);color:#fff}
+.pill.on{background:var(--red-solid);border-color:var(--red-solid);color:#fff}
 .pill.on:hover{background:var(--red-dark);border-color:var(--red-dark);color:#fff}
 .pill.small{padding:4px 14px;min-height:34px;font-size:14px}
-.pill:disabled{opacity:.3;cursor:default;border-color:var(--ink);color:var(--ink)}
+.pill:disabled,.pill.on:disabled{opacity:1;cursor:default;border-color:var(--rule);color:var(--faint);background:var(--paper)}
+#theme[aria-pressed=true]{background:var(--ink);color:var(--paper)}
+#theme[aria-pressed=true]:hover{background:var(--red-solid);border-color:var(--red-solid);color:#fff}
 .link{background:none;border:0;padding:6px 0;cursor:pointer;font-size:14px;color:var(--grey)}
 .link:hover{color:var(--red)}
 
@@ -73,11 +92,14 @@ input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;heigh
 input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--fill);border:0}
 input[type=range].limit{--fill:var(--red)}
 input[type=checkbox]{width:20px;height:20px;margin:0;accent-color:var(--ink);cursor:pointer;flex:none}
-select{background:transparent;border:0;border-bottom:1px solid var(--ink);border-radius:0;padding:2px 18px 2px 0;font-size:14px;cursor:pointer;
+select{--select-ink:var(--ink);background:var(--paper);border:0;border-bottom:1px solid var(--select-ink);border-radius:0;padding:2px 18px 2px 0;font-size:14px;cursor:pointer;
   -webkit-appearance:none;appearance:none;
-  background-image:linear-gradient(45deg,transparent 50%,var(--ink) 50%),linear-gradient(135deg,var(--ink) 50%,transparent 50%);
+  background-image:linear-gradient(45deg,transparent 50%,var(--select-ink) 50%),linear-gradient(135deg,var(--select-ink) 50%,transparent 50%);
   background-position:calc(100% - 9px) 55%,calc(100% - 5px) 55%;background-size:4px 4px;background-repeat:no-repeat}
-input[type=text]{width:100%;border:0;border-bottom:1px solid var(--ink);padding:6px 0;background:transparent}
+select option{background:var(--paper);color:var(--ink)}
+input[type=text]{width:100%;border:0;border-bottom:1px solid var(--ink);padding:6px 0;background:var(--paper);caret-color:var(--ink)}
+input::placeholder{color:var(--grey);opacity:1}
+input:disabled,select:disabled{color:var(--faint);cursor:default}
 .check{display:flex;align-items:center;gap:8px;cursor:pointer}
 /* label, slider, number: used for max strength and device strength */
 .level{display:grid;grid-template-columns:76px minmax(0,1fr) 52px;align-items:center;gap:12px}
@@ -102,7 +124,9 @@ input[type=text]{width:100%;border:0;border-bottom:1px solid var(--ink);padding:
 .row .num{transition:color .1s}
 .row.live .num{color:var(--red)}
 .row.off .name,.row.off .num{color:var(--faint)}
-.row.off .ctl{opacity:.45}
+.row.off .ctl{color:var(--faint)}
+.row.off select{--select-ink:var(--faint)}
+.row.off input[type=range]{--fill:var(--faint)}
 
 /* devices */
 .dev{display:flex;flex-direction:column;gap:12px;padding:12px 0 16px;border-bottom:1px solid var(--rule)}
@@ -121,10 +145,10 @@ input[type=text]{width:100%;border:0;border-bottom:1px solid var(--ink);padding:
 code{font:14px ui-monospace,Consolas,monospace;word-break:break-all}
 
 footer{margin-top:48px;display:flex;flex-wrap:wrap;justify-content:space-between;gap:8px 24px}
-.toast{position:fixed;right:16px;bottom:16px;background:var(--ink);color:#fff;padding:10px 16px;font-weight:700;font-size:14px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}
+.toast{position:fixed;right:16px;bottom:16px;background:var(--ink);color:var(--paper);padding:10px 16px;font-weight:700;font-size:14px;opacity:0;transform:translateY(8px);transition:.2s;pointer-events:none}
 .toast.show{opacity:1;transform:none}
-.toast.err{background:var(--red)}
-.offline{position:fixed;inset:0;background:rgba(255,255,255,.96);display:none;place-items:center;padding:24px;z-index:5}
+.toast.err{background:var(--red-solid);color:#fff}
+.offline{position:fixed;inset:0;background:var(--overlay);display:none;place-items:center;padding:24px;z-index:5}
 .offline.show{display:grid}
 .offline > div{max-width:560px;display:flex;flex-direction:column;gap:12px}
 .offline h2{font-size:44px;font-weight:900;line-height:1;letter-spacing:-1px}
@@ -153,6 +177,7 @@ footer{margin-top:48px;display:flex;flex-wrap:wrap;justify-content:space-between
     </dl>
     <div class="actions">
       <button class="pill on" id="power" aria-pressed="true" aria-label="Feedback" title="Turn all feedback on or off">On</button>
+      <button class="pill" id="theme" aria-pressed="false" aria-label="Dark mode" title="Switch to dark mode">Dark mode</button>
       <button class="pill" id="quit" title="Stop all devices and close the app">Quit</button>
     </div>
   </header>
@@ -410,7 +435,7 @@ function updateStatus() {
   status('link', link[0], link[1], S.engine_download || S.link_detail, linkAction);
   if (S.devices.length) status('dev', '', S.devices.map(d => d.name).join(', '), S.devices.length > 1 ? S.devices.length + ' devices' : '');
   else if (S.scanning) status('dev', 'wait', 'Scanning', 'Pairing mode on?');
-  else if (S.link === 'connected') status('dev', 'bad', 'None', 'Turn it on, then scan', ['Scan', () => api('scan')]);
+  else if (S.link === 'connected') status('dev', 'bad', 'None', 'Turn it on, then scan');
   else status('dev', '', 'None', 'Waiting for Intiface');
   const game = {live: ['', 'Live'], idle: ['', 'Connected'], paused: ['wait', 'Paused'], offline: ['', 'Not running'], waiting: ['', 'Waiting']}[S.game] || ['', S.game];
   status('game', game[0], game[1], S.game === 'live' ? '' : S.game_detail);
@@ -466,6 +491,27 @@ async function poll() {
 function update() { if (S) { updateStatus(); updateInteractions(); updateDevices(); drawBars(); } }
 
 // ---- wiring ----
+function updateTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  const dark = theme === 'dark';
+  $('theme').setAttribute('aria-pressed', dark);
+  $('theme').title = 'Switch to ' + (dark ? 'light' : 'dark') + ' mode';
+  if (S) drawBars();
+}
+updateTheme(document.documentElement.dataset.theme);
+$('theme').onclick = () => {
+  themePreference = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  try { localStorage.setItem('nch-theme', themePreference); } catch (e) {}
+  updateTheme(themePreference);
+};
+themeMedia.addEventListener('change', () => {
+  if (!themePreference) updateTheme(themeMedia.matches ? 'dark' : 'light');
+});
+window.addEventListener('storage', e => {
+  if (e.key !== 'nch-theme' && e.key !== null) return;
+  themePreference = e.newValue === 'light' || e.newValue === 'dark' ? e.newValue : null;
+  updateTheme(themePreference || (themeMedia.matches ? 'dark' : 'light'));
+});
 function showSettings(on) {
   $('setbody').hidden = !on;
   $('settoggle').setAttribute('aria-expanded', on);

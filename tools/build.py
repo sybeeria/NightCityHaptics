@@ -7,7 +7,7 @@ import shutil
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.3"
+VERSION = "0.2.4"
 MOD = Path("bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics")
 
 

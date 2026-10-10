@@ -37,7 +37,7 @@ sys.path.insert(0, str(HERE))
 import buttplug  # noqa: E402
 import haptics  # noqa: E402
 
-VERSION = "0.2.4"
+VERSION = "0.3.0"
 PORT = 19870
 TICK = 1 / 30
 IDLE_TICK = 1 / 10   # while no game heartbeat is live and nothing plays
@@ -240,6 +240,9 @@ class App:
     def __init__(self, mod_dir, settings_path=None):
         self.mod_dir = mod_dir
         self.catalog = json.loads((HERE / "catalog.json").read_text(encoding="utf-8"))
+        # Each feel's shape, drawn next to its picker on the control page.
+        self.previews = {kind: {f["id"]: haptics.preview(self.catalog, kind, f["id"]) for f in feels}
+                         for kind, feels in self.catalog["feels"].items()}
         self.settings_path = settings_path or HERE / "settings.json"
         self.settings = haptics.normalize_settings(read_json(self.settings_path), self.catalog)
         self.lock = threading.RLock()
@@ -274,6 +277,9 @@ class App:
                         raise ValueError("Unknown setting: " + key)
                     if key in ("enabled", "start_intiface", "on", "all_motors") and type(value) is not bool:
                         raise ValueError(key + " must be true or false")
+                    if key == "outputs" and (not isinstance(value, dict) or any(
+                            name not in haptics.CHANNELS or type(on) is not bool for name, on in value.items())):
+                        raise ValueError("outputs must map device outputs to true or false")
                     if key in ("max_strength", "strength"):
                         try:
                             valid = type(value) in (int, float) and math.isfinite(value) and 0 <= value <= 1
@@ -307,7 +313,7 @@ class App:
                     for name, options in value.items():
                         if not isinstance(name, str) or not isinstance(options, dict):
                             raise ValueError(key + " entries must be named objects")
-                        validate(options, {"on", "strength", "feel"} if key == "interactions" else {"on", "strength", "all_motors"})
+                        validate(options, {"on", "strength", "feel"} if key == "interactions" else {"on", "strength", "all_motors", "outputs"})
                         if key == "interactions":
                             item = next((item for item in self.catalog["interactions"] if item["id"] == name), None)
                             if item is None:
@@ -315,7 +321,12 @@ class App:
                             if "feel" in options and (not isinstance(options["feel"], str)
                                     or options["feel"] not in haptics.feel_ids(self.catalog, item)):
                                 raise ValueError("Invalid feel for " + name)
-                        merged[key].setdefault(name, {}).update(options)
+                        target = merged[key].setdefault(name, {})
+                        for option, value in options.items():
+                            if option == "outputs":
+                                target["outputs"] = dict(target.get("outputs") or {}, **value)
+                            else:
+                                target[option] = value
                 else:
                     merged[key] = value
             settings = haptics.normalize_settings(merged, self.catalog)
@@ -435,7 +446,9 @@ class App:
                     self.client.poll()
                     if self.client.scanning and (now > self.scan_until or len(self.client.devices) > self.scan_count):
                         self.client.stop_scanning()
-                    self.outputs.update(self.client, output, self.settings["devices"], now)
+                    # Nothing can play: suction/heat stop at once instead of easing out.
+                    quiet = not self.settings["enabled"] or (not active and not self.mixer.voices)
+                    self.outputs.update(self.client, output, self.settings["devices"], now, quiet)
                 except (OSError, buttplug.ConnectionClosed) as exc:
                     logging.warning("Intiface connection lost: %s", exc)
                     self.disconnect(f"Connection lost: {exc}")
@@ -524,8 +537,11 @@ class App:
             devices = []
             for device in (self.client.devices.values() if self.client else []):
                 info = buttplug.summary(device)
-                info["settings"] = dict({"on": True, "strength": 1., "all_motors": False},
-                                        **buttplug.device_options(device, self.settings["devices"]))
+                options = buttplug.device_options(device, self.settings["devices"])
+                enabled = buttplug.enabled_channels(device, options)
+                info["settings"] = {"on": options.get("on") is not False, "strength": options.get("strength", 1.),
+                                    "outputs": {channel: channel in enabled for channel in info["channels"]}}
+                info["battery"] = self.client.battery.get(device["DeviceIndex"])
                 devices.append(info)
             return {"version": VERSION, "settings": self.settings, "output": self.output,
                     "contributions": dict(self.mixer.contributions), "history": self.output_history(now),
@@ -630,7 +646,7 @@ def make_server(app, port):
                 return self.reply(200, page.read_bytes(), "text/html; charset=utf-8")
             if self.path == "/api/state":
                 state = app.snapshot()
-                state["catalog"] = app.catalog if self.headers.get("X-NCH-Catalog") else None
+                state["catalog"] = dict(app.catalog, previews=app.previews) if self.headers.get("X-NCH-Catalog") else None
                 return self.reply(200, state)
             if self.path == "/fonts/archivo.woff2":
                 return self.reply(200, (HERE / "fonts/archivo.woff2").read_bytes(), "font/woff2")

@@ -24,6 +24,16 @@ def device(index=1, name="Test model", display=None, gap=0, linear=False):
     return result
 
 
+def rich(index=4):
+    """A device with every v3 output Intiface 5 can list, including ones never driven."""
+    types = ("Vibrate", "Constrict", "Temperature", "Led", "Spray", "Rotate", "Position")
+    return {"DeviceIndex": index, "DeviceName": "Everything", "DeviceMessageTimingGap": 0,
+            "DeviceMessages": {"ScalarCmd": [{"ActuatorType": t, "StepCount": 10} for t in types],
+                               "RotateCmd": [{"StepCount": 20}], "LinearCmd": [{"StepCount": 99}],
+                               "SensorReadCmd": [{"SensorType": "Battery", "FeatureDescriptor": "", "SensorRange": [[0, 100]]}],
+                               "StopDeviceCmd": {}}}
+
+
 class Recorder:
     def __init__(self, *devices):
         self.devices = {d["DeviceIndex"]: d for d in devices}
@@ -35,9 +45,97 @@ class Recorder:
     def send(self, kind, fields, index=None):
         self.commands.append((self.now, kind, fields))
 
-    def update(self, outputs, strength, settings, now):
+    def update(self, outputs, strength, settings, now, quiet=False):
         self.now = now
-        outputs.update(self, strength, settings, now)
+        outputs.update(self, strength, settings, now, quiet)
+
+
+class ChannelTests(unittest.TestCase):
+    def scalars(self, client):
+        return {s["ActuatorType"]: s["Scalar"] for _, kind, fields in client.commands
+                if kind == "ScalarCmd" for s in fields["Scalars"]}
+
+    def test_channel_map_skips_duplicate_listings_and_spray(self):
+        routes = buttplug.channels(rich())
+        self.assertEqual(list(routes), ["vibrate", "rotate", "stroke", "constrict", "heat", "light"])
+        self.assertEqual(routes["rotate"], [("RotateCmd", 0)], "two-way rotators use RotateCmd only")
+        self.assertEqual(routes["stroke"], [("LinearCmd", 0)], "positional strokers use LinearCmd only")
+        self.assertNotIn(4, [i for items in routes.values() for _, i in items], "spray is never driven")
+
+    def test_defaults_vibration_and_light_then_motion_for_devices_without_vibration(self):
+        self.assertEqual(buttplug.enabled_channels(rich(), {}), {"vibrate", "light"})
+        motion = rich()
+        motion["DeviceMessages"]["ScalarCmd"] = [{"ActuatorType": "Oscillate", "StepCount": 10},
+                                                 {"ActuatorType": "Temperature", "StepCount": 1}]
+        self.assertEqual(buttplug.enabled_channels(motion, {}), {"rotate", "oscillate", "stroke"})
+        self.assertEqual(buttplug.enabled_channels(rich(), {"all_motors": True}),
+                         {"vibrate", "rotate", "stroke", "constrict", "light"}, "legacy All motors never heats")
+        self.assertEqual(buttplug.enabled_channels(rich(), {"all_motors": True, "outputs": {"heat": True, "light": False}}),
+                         {"vibrate", "rotate", "stroke", "constrict", "heat"})
+
+    def test_heat_and_suction_ease_in_and_stop_at_once_when_quiet(self):
+        d = rich()
+        client, outputs = Recorder(d), buttplug.Outputs()
+        settings = {buttplug.settings_key(d): {"outputs": {"heat": True, "constrict": True}}}
+        client.update(outputs, .8, settings, 0)
+        first = self.scalars(client)
+        self.assertEqual((first["Vibrate"], first["Led"], first["Constrict"], first["Temperature"]), (.8, .8, 0, 0))
+        self.assertNotIn("Spray", first)
+        for i in range(1, 61):
+            client.update(outputs, .8, settings, i / 10)
+        later = {}
+        for _, kind, fields in client.commands:
+            if kind == "ScalarCmd":
+                later.update({s["ActuatorType"]: s["Scalar"] for s in fields["Scalars"]})
+        self.assertGreater(later["Constrict"], .7)
+        self.assertTrue(.3 < later["Temperature"] < .8, "heat is slower than suction")
+        client.update(outputs, 0, settings, 6.1)
+        self.assertNotEqual(client.commands[-1][1], "StopDeviceCmd", "between events the slow outputs ease out")
+        client.update(outputs, 0, settings, 6.2, quiet=True)
+        self.assertEqual(client.commands[-2][1], "StopDeviceCmd")
+        self.assertEqual(outputs.sent[4][0], 0)
+
+    def test_rotation_flips_direction_on_a_fresh_hit(self):
+        d = rich()
+        client, outputs = Recorder(d), buttplug.Outputs()
+        settings = {buttplug.settings_key(d): {"outputs": {"rotate": True}}}
+        for now, value in ((0, .2), (.1, .25), (.2, .7), (.3, .72)):
+            client.update(outputs, value, settings, now)
+        spins = [fields["Rotations"][0]["Clockwise"] for _, kind, fields in client.commands if kind == "RotateCmd"]
+        self.assertEqual(spins, [True, True, False, False])
+
+    def test_position_only_servos_are_paced_by_the_client(self):
+        d = rich()
+        d["DeviceMessages"] = {"ScalarCmd": [{"ActuatorType": "Position", "StepCount": 99}], "StopDeviceCmd": {}}
+        client, outputs = Recorder(d), buttplug.Outputs()
+        for i in range(61):
+            client.update(outputs, 1, {}, i / 30)
+        positions = [round(f["Scalars"][0]["Scalar"], 1) for _, kind, f in client.commands if kind == "ScalarCmd"]
+        self.assertEqual(positions[:4], [.9, .1, .9, .1])
+        self.assertLessEqual(len(positions), 8, "one command per stroke, not per tick")
+
+    def test_battery_reads_are_periodic_optional_and_quiet_on_failure(self):
+        client = actual_client()
+        client.devices = {4: rich()}
+        client.refresh_batteries(0)
+        sent = [m for m in client.ws.sent if "SensorReadCmd" in m]
+        self.assertEqual(len(sent), 1)
+        ident = sent[0]["SensorReadCmd"]["Id"]
+        client._handle(json.dumps([{"SensorReading": {"Id": ident, "DeviceIndex": 4, "SensorIndex": 0,
+                                                      "SensorType": "Battery", "Data": [42]}}]))
+        self.assertEqual(client.battery[4], .42)
+        client.refresh_batteries(30)
+        self.assertEqual(sum("SensorReadCmd" in m for m in client.ws.sent), 1, "about once a minute")
+        client.refresh_batteries(61)
+        ident = [m for m in client.ws.sent if "SensorReadCmd" in m][-1]["SensorReadCmd"]["Id"]
+        client._handle(json.dumps([{"Error": {"Id": ident, "ErrorCode": 4, "ErrorMessage": "no battery"}}]))
+        self.assertFalse(client.closed)
+        self.assertEqual(client.errors, [], "an unsupported battery read is not a device error")
+        client.refresh_batteries(122)
+        with patch("buttplug.time.monotonic", return_value=1e9):
+            client._maintain(1e9)
+        self.assertFalse(client.closed, "an unanswered battery read never drops the connection")
+        self.assertFalse(client.pending)
 
 
 class OutputRegressions(unittest.TestCase):
@@ -106,7 +204,7 @@ class OutputRegressions(unittest.TestCase):
         self.assertEqual({kind for _, kind in positive}, {"ScalarCmd", "RotateCmd", "LinearCmd"})
         for (t, _), (later, _) in zip(positive, positive[1:]):
             self.assertGreaterEqual(later - t + 1e-9, .1)
-        client.update(outputs, 0, settings, 1.001)
+        client.update(outputs, 0, settings, 1.001, quiet=True)
         self.assertEqual(client.commands[-2][1], "StopDeviceCmd", "urgent stop bypasses ordinary output delay")
         self.assertFalse(outputs.queues.get(1))
 
@@ -149,6 +247,7 @@ def actual_client():
     client.scanning, client.next_ping, client.ping_every = False, float("inf"), 0
     client.closed = False
     client.scan_id = None
+    client.battery, client.battery_due, client.battery_reads = {}, {}, {}
     return client
 
 

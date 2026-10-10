@@ -10,7 +10,7 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.2.4"
+VERSION = "0.3.0"
 MOD = Path("bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics")
 REQUIRED = {"init.lua", "companion/nch.py", "companion/haptics.py", "companion/buttplug.py",
             "companion/catalog.json", "companion/ui.html", "companion/start.sh", "companion/start.cmd",

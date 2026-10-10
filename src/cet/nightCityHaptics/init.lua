@@ -1,4 +1,4 @@
--- Night City Haptics 0.2.4 (CET part)
+-- Night City Haptics 0.3.0 (CET part)
 -- Reports what happens in the game to the Night City Haptics companion app by
 -- sampling about 30 times a second and writing state.json on changes/events or
 -- at a quiet 5 Hz heartbeat. The companion owns
@@ -22,8 +22,15 @@
 -- psm/finisher.script:284 (PlayerInFinisherWorkspot on workspot and fast finishers);
 -- levelupNotification.script:162 (Espionage notification converts its level to a delta);
 -- core/systems/timeSystem.script:19, core/data/engineTime.script:6 (scene simulation clock).
+-- player.script:3769 OnHitBlockedOrDeflected (blocks/parries; attackData.script:366-388);
+-- player.script:4139 OnDamageInflicted (queued to the instigator, gameObject.script:1552);
+-- psm/combatGadgetTransitions.script:442/494 (PlayerStateMachine.CombatGadget Throwing/QuickThrow);
+-- hitReactionComponent.script:2923 (BaseStatusEffect.PlayerExhausted);
+-- rpgManager.script:4437-4649 UploadFromNPCToPlayerListener (UI_HUDProgressBar Active/Progress);
+-- psmImports.script:741 gamePSMMeleeWeapon Hold/ChargedHold (charged melee);
+-- blackboardDefinitions.script:753 Vehicle.RPMValue/RPMMax (car_hud.script:186, vcar_controller.script:158).
 -- Scene facts and timings checked against current vanilla .scene files.
-local mod = {version = "0.2.4"}
+local mod = {version = "0.3.0"}
 local R = {
   session = "", seq = 0, clock = 0, sampleClock = 0, writeClock = 0, overlay = false,
   loading = false, paused = false, shutdown = false, active = false, reason = "starting",
@@ -95,7 +102,7 @@ end
 local function newSession(reason)
   R.session = tostring(os.time()) .. "-" .. string.format("%.6f", os.clock()) .. "-" .. tostring({}):gsub("[^%w]", "")
   R.seq, R.events, R.seen, R.cooldowns, R.levels, R.paused = 0, {}, {}, {}, {}, false
-  R.scene, R.sceneCount, R.joytoyUntil, R.chargeStart = {}, 0, 0, nil
+  R.scene, R.sceneCount, R.joytoyUntil, R.chargeStart, R.chargeSeen, R.hitClock = {}, 0, 0, nil, nil, nil
   R.active, R.reason, R.playerKey = false, reason, nil
   writeState()
 end
@@ -248,7 +255,7 @@ local function updateScene(dt)
   end
 end
 local function clearEdges()
-  R.seen, R.chargeStart = {}, nil
+  R.seen, R.chargeStart, R.chargeSeen = {}, nil, nil
 end
 
 local function registerHooks()
@@ -264,7 +271,11 @@ local function registerHooks()
   hook("FastTravelSystem", "OnLoadingScreenFinished", function(_, finished) if finished then R.loading = false end end)
 
   hook("ShootEvents", "OnEnter", function(_, _, interface)
-    if interface and samePlayer(interface.executionOwner) then event("gunfire", shotStrength(interface.executionOwner)) end
+    if not interface or not samePlayer(interface.executionOwner) then return end
+    local kick = shotStrength(interface.executionOwner)
+    -- Releasing a charge fires a moment after the charge state ends.
+    if R.chargeSeen and R.clock - R.chargeSeen < .3 then kick = math.max(kick, R.chargeLevel or 0) end
+    event("gunfire", kick)
   end)
   hook("PlayerPuppet", "OnHitAnimation", function(self, hit)
     if not samePlayer(self) or not hit or not hit.attackComputed then return end
@@ -273,6 +284,16 @@ local function registerHooks()
     if maximum > 0 and damage > 0 then event("hurt", math.max(.3, damage / maximum / .25)) end
   end)
   hook("PlayerPuppet", "OnTargetNeutraliziedEvent", function(self) if samePlayer(self) then event("kill") end end)
+  hook("PlayerPuppet", "OnHitBlockedOrDeflected", function(self, hit)
+    if not samePlayer(self) or not hit or not hit.attackData then return end
+    event("block", hit.attackData:WasDeflectedAny() and 1 or .65)
+  end)
+  hook("PlayerPuppet", "OnDamageInflicted", function(self)
+    -- One shotgun blast damages many times in a frame; count it once.
+    if not samePlayer(self) or (R.hitClock and R.clock - R.hitClock < .08) then return end
+    R.hitClock = R.clock
+    event("hitLanded")
+  end)
   hook("AudioSystem", "PlayShockwave", function(_, kind, position) if NameToString(kind) == "explosion" then explosionAt(position) end end)
   hook("WeaponGrenade", "OnExplosion", function(self) explosionAt(self:GetWorldPosition()) end)
   hook("ExplosiveDevice", "Explosion", function(self) explosionAt(self:GetWorldPosition()) end)
@@ -337,7 +358,8 @@ local K  -- game handles built once, on the first sample
 local function sample(player)
   K = K or {kerenzikov = TweakDBID.new("BaseStatusEffect.KerenzikovPlayerBuff"),
     finisher = TweakDBID.new("BaseStatusEffect.PlayerInFinisherWorkspot"),
-    camo = CName.new("CamoActiveOnPlayer"), johnny = CName.new("JohnnySickness")}
+    camo = CName.new("CamoActiveOnPlayer"), johnny = CName.new("JohnnySickness"),
+    exhausted = TweakDBID.new("BaseStatusEffect.PlayerExhausted")}
   local levels = {}
   local defs = Game.GetAllBlackboardDefs()
   local psm = player:GetPlayerStateMachineBlackboard()
@@ -351,8 +373,11 @@ local function sample(player)
     local jumping = isOneOf("gamePSMDetailedLocomotionStates", detailed, {"Jump", "DoubleJump", "ChargeJump", "HoverJump"})
     local dodging = isOneOf("gamePSMDetailedLocomotionStates", detailed, {"Dodge", "DodgeAir", "Slide"})
     if changed("detailed", detailed) then
-      if jumping then event("jump") elseif dodging then event("dodge") end
+      if jumping then event("jump") elseif dodging then event("dodge")
+      elseif detailed == enum("gamePSMDetailedLocomotionStates", "Climb") then event("climb")
+      elseif detailed == enum("gamePSMDetailedLocomotionStates", "Vault") then event("climb", .7) end
     end
+    if rose("exhausted", Game.GetStatusEffectSystem():HasStatusEffect(id, K.exhausted)) then event("exhausted") end
     local landing = psm:GetInt(P.Landing)
     if changed("landing", landing) and landing ~= enum("gamePSMLandingState", "Default") then
       local strength = {RegularLand = .4, HardLand = .7, VeryHardLand = 1, DeathLand = 1, SuperheroLand = 1}
@@ -365,6 +390,10 @@ local function sample(player)
       "SafeAttack", "BlockAttack", "SprintAttack", "CrouchAttack", "JumpAttack", "ThrowAttack", "DeflectAttack", "EquipAttack"}) then
       event("melee", isOneOf("gamePSMMeleeWeapon", state, {"FinalAttack", "StrongAttack"}) and 1 or .7)
     end
+  end)
+  probe("gadget", function()
+    local state = psm:GetInt(P.CombatGadget)
+    if changed("gadget", state) and isOneOf("gamePSMCombatGadget", state, {"Throwing", "QuickThrow"}) then event("throw") end
   end)
   probe("levels", function()
     -- Baseline every progression level so the first level-up after loading counts.
@@ -408,13 +437,19 @@ local function sample(player)
     if not psm:GetBool(P.MountedToVehicle) then R.seen.gear = nil; return end
     local speed = VehicleComponent.GetOwnerVehicleSpeed(player:GetGame(), player)
     if not finite(speed) then return end
-    speed = math.abs(speed)
-    levels.engine = .15 + .85 * math.min(1, speed / 40)
+    speed = math.min(1, math.abs(speed) / 40)
+    levels.engine = .15 + .85 * speed
     local mount = Game.GetMountingFacility():GetMountingInfoSingleWithIds(id)
     local vehicle = Game.FindEntityByID(mount.parentId)
     local board = vehicle and vehicle:GetBlackboard()
     if not board then return end
-    if speed > 2 then
+    -- Revs make the engine breathe with the throttle and gear changes, even standing still.
+    local rpm, top = board:GetFloat(defs.Vehicle.RPMValue), board:GetFloat(defs.Vehicle.RPMMax)
+    if finite(rpm) and rpm > 0 then
+      local revs = math.min(1, rpm / ((finite(top) and top > 0) and top or 8000))
+      levels.engine = .15 + .85 * (.6 * revs + .4 * speed)
+    end
+    if speed > 2 / 40 then
       local handbrake = board:GetInt(defs.Vehicle.IsHandbraking) ~= 0 and .6 or 0
       local slip = board:GetFloat(defs.Vehicle.MeanSlipRatio)
       levels.drift = math.max(handbrake, finite(slip) and math.min(1, math.abs(slip) / .5) or 0)
@@ -432,14 +467,17 @@ local function sample(player)
     levels.shock = (has("Electrocuted") or has("EMP")) and 1 or 0
     levels.poison = (has("Poisoned") or has("Bleeding")) and 1 or 0
     levels.relic = effects:HasStatusEffectWithTag(id, K.johnny) and 1 or 0
-    if rose("knockdown", has("Knockdown") or has("Stunned")) then event("knockdown") end
+    if rose("knockdown", has("Knockdown") or has("Stunned") or has("VehicleKnockdown")) then event("knockdown") end
     if rose("flashed", has("Blind")) then event("flashed") end
   end)
   probe("weapon", function()
     local state = psm:GetInt(P.Weapon)
-    if state == enum("gamePSMRangedWeaponStates", "Charging") then
+    local melee = psm:GetInt(P.MeleeWeapon)
+    if state == enum("gamePSMRangedWeaponStates", "Charging") or isOneOf("gamePSMMeleeWeapon", melee, {"Hold", "ChargedHold"}) then
       R.chargeStart = R.chargeStart or R.clock
       levels.charge = .25 + .75 * math.min(1, (R.clock - R.chargeStart) / 1.5)
+      if melee == enum("gamePSMMeleeWeapon", "ChargedHold") then levels.charge = 1 end
+      R.chargeLevel, R.chargeSeen = levels.charge, R.clock
     else
       R.chargeStart, levels.charge = nil, 0
     end
@@ -454,6 +492,12 @@ local function sample(player)
     local ringing = call ~= nil and not call.isPlayerCalling
       and tonumber(EnumInt(call.callPhase)) == enum("questPhoneCallPhase", "IncomingCall")
     levels.phoneRing = ringing and 1 or 0
+  end)
+  probe("hacked", function()
+    -- The upload bar an enemy netrunner's quickhack fills on your HUD.
+    local board = Game.GetBlackboardSystem():Get(defs.UI_HUDProgressBar)
+    local progress = board:GetFloat(defs.UI_HUDProgressBar.Progress)
+    levels.hacked = board:GetBool(defs.UI_HUDProgressBar.Active) and .35 + .65 * clamp(progress) or 0
   end)
   probe("oxygen", function()
     levels.oxygen = 0

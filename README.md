@@ -1,9 +1,9 @@
 # Night City Haptics
 
 Cyberpunk 2077 haptics for any [Intiface](https://intiface.com)-compatible device (18+). Gunfire
-kicks, hits thud, low health beats like a heart and engines rumble with speed. You get 41
-interactions, including scene-specific romance and joytoy tracks, weapon charging and status
-effects. Each one has its own switch, feel and strength, tuned live from a local control page.
+kicks, hits thud, low health beats like a heart and engines rev. There are 47 interactions,
+including romance and joytoy scene tracks. Each one has its own switch, feel and strength, which
+you tune live on a local control page.
 
 ![Control page](docs/screenshot.png)
 
@@ -11,198 +11,165 @@ effects. Each one has its own switch, feel and strength, tuned live from a local
 
 - Cyberpunk 2077 on PC (Windows, or Linux / SteamOS through Proton) with
   [Cyber Engine Tweaks](https://www.nexusmods.com/cyberpunk2077/mods/107).
-- Python 3.9 or newer. On Windows, get it from
-  [python.org](https://www.python.org/downloads/). The app needs no other packages.
-- An Intiface-compatible device. See the [compatible-device index](https://iostindex.com/)
-  and check **Buttplug.io Support**.
+- Python 3.9 or newer ([python.org](https://www.python.org/downloads/) on Windows). The app
+  needs no other packages.
+- A device with **Buttplug.io Support** in the [compatible-device index](https://iostindex.com/).
 
-You don't need to install or start Intiface separately. The app downloads the official Intiface
-Engine once and verifies its checksum. After that it starts the engine by itself. If you already
-run Intiface Central on its default port (12345), the app uses that instead.
+You don't need to install Intiface. The app downloads the official Intiface Engine once,
+checks its checksum and starts it. If Intiface Central is already running on port 12345, the
+app uses that instead.
 
 ## Setup
 
-1. Download [`NightCityHaptics-0.2.4.zip`](dist/NightCityHaptics-0.2.4.zip). Extract it into the
-   game folder, the one that contains `bin`.
-2. Open `bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/` and run
-   **`start.cmd`** on Windows or **`start.sh`** on Linux. The control page opens in your browser.
+1. Download [`NightCityHaptics-0.3.0.zip`](dist/NightCityHaptics-0.3.0.zip) and extract it
+   into the game folder (the one that contains `bin`).
+2. In `bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics/companion/`, run **`start.cmd`**
+   (Windows) or **`start.sh`** (Linux). The control page opens in your browser.
+3. On first run, click **Download engine** in Settings. Then put your device in pairing mode.
+4. Play. Feedback runs only during live gameplay, not in menus, loading screens, photo mode or
+   the CET overlay.
 
-   **Steam on Linux/SteamOS:** save [nch-steam-launch](https://raw.githubusercontent.com/sybeeria/NightCityHaptics/main/tools/nch-steam-launch)
-   in the game folder. In Steam → Cyberpunk 2077 → Properties → Launch Options, use:
+**Optional, Steam on Linux/SteamOS:** to start the app with the game, save
+[nch-steam-launch](https://raw.githubusercontent.com/sybeeria/NightCityHaptics/main/tools/nch-steam-launch)
+in the game folder and set the game's Launch Options to:
 
-   ```sh
-   /bin/sh "/path/to/Cyberpunk 2077/nch-steam-launch" -- %command%
-   ```
+```sh
+/bin/sh "/path/to/Cyberpunk 2077/nch-steam-launch" -- %command%
+```
 
-   Replace the path. Keep existing overrides first, wrappers after `--`, and game flags after `%command%`.
-   This starts the companion with the game and stops the instance it started when you exit.
-   Tune it on [the control page](http://127.0.0.1:19870/).
-
-3. On the first run, click **Download engine** in Settings. Put your device in pairing mode
-   and the app finds it.
-4. Play. Game-driven feedback runs only during live gameplay. Menus, pause, loading screens,
-   photo mode and the CET overlay suspend it.
+Put existing environment overrides first, other wrappers after `--`, and game flags after
+`%command%`. The app closes when the game does.
 
 ## Using it
 
-- **Interactions:** grouped and collapsible. Switch each one on or off (or a whole group), pick a
-  feel, set its strength and press **Try** to feel it. Every interaction is a share of
-  **Max strength**, and their mixed output never goes above it. Max strength defaults to **70%**.
-- **On/Off:** stops or enables the interaction mix, including Try previews. **Pause** in the CET
-  overlay suspends game-driven feedback. Both Pause and **Test buzz** can be bound in CET's
-  Bindings.
-- **Devices:** enable each device, set its strength, choose **All motors**, and **Test** or
-  **Scan** again. Devices default to enabled, 100% strength and vibration motors only;
-  All motors is off.
-- **Previews:** Try works without a running game and can preview an interaction that is switched
-  off. Device Test is a separate 0.8-second pulse at 50% of that device's strength; it runs even
-  with the mix Off and does not use Max strength. **Quit** stops devices and exits the app.
-- **No device yet?** The live meter shows the interaction mix that would be sent; device strength
-  and the separate Device Test can differ from the meter.
-- **Settings** (under Devices) holds the Intiface address (default `ws://127.0.0.1:12345`),
-  engine auto-start (on by default), and **Reset interactions**. The reset keeps your device and
-  Intiface settings.
-- **Quit** (top right) stops your devices and any Intiface Engine started by the app. Settings
-  save automatically to `companion/settings.json`. The app starts with the mix On by default.
+- **Interactions:** set a switch, feel and strength for each interaction, or switch a whole
+  group. The shape next to each feel shows how it plays. **Try** previews it without the game.
+- **Max strength** caps the whole mix (default 70%). **On/Off** stops all of it. **Pause** in the
+  CET overlay suspends game feedback; Pause and Test buzz can be bound in CET's Bindings.
+- **Devices:** each device has a switch, strength, battery level and one button per output it
+  has. **Test** sends a short pulse at half that device's strength.
 
-| Group | Interactions (* = off by default) |
+| Output | What it does |
 |---|---|
-| Combat | gunfire (by weapon class), getting hit, low health, explosions (by distance), melee, kills, takedowns, combat start, charging a shot, reloads, weapon overheat |
-| Status effects | burning, electrocuted / EMP, poisoned / bleeding, knocked down / stunned, blinded, Relic glitches |
-| Cyberware | Sandevistan / Kerenzikov, Berserk, quickhack upload, optical camo* |
-| Movement | sprinting, jumps, landings, dodges / slides, running out of air |
-| Driving | engine (by speed), crashes, drifting, gear shifts* |
-| Rewards & world | police heat, level up, quest completed, eddies, healing, loot pickups*, incoming calls |
-| Scenes | romance scenes, joytoys, braindances*, other mods |
+| Vibrate | follows the mix |
+| Rotate | follows the mix; a sudden hit reverses the spin |
+| Thrust | thrusting and oscillating motors follow the mix |
+| Stroke | strokes faster and further as the mix rises |
+| Squeeze | suction and air pumps ease toward the mix (off by default) |
+| Heat | warms with sustained feedback, cools after (off by default) |
+| Light | follows the mix |
 
-Charging builds over 1.5 seconds. Low-air feedback starts below half your oxygen while diving and
-increases as it runs out. Incoming calls use a two-buzz ringing pattern until you answer or decline.
+A device with a vibrator starts with Vibrate and Light on. Other devices start with their motion
+outputs and Light on.
+
+- **Settings** holds the Intiface address (default `ws://127.0.0.1:12345`), engine auto-start and
+  **Reset interactions**. The reset keeps your device and Intiface settings. Settings save
+  automatically.
+- **Quit** stops your devices and the engine the app started.
 
 <details>
-<summary>Every interaction's default switch, strength and feel</summary>
+<summary>All 47 interactions and their defaults</summary>
 
-Strength is a percentage of Max strength, before the game signal and feel are applied.
+Strength is a share of Max strength.
 
-| Group | Interaction | Switch | Strength | Feel |
-|---|---|---|---|---|
-| Combat | Gunfire | On | 45% | Kick |
-| Combat | Getting hit | On | 90% | Thud |
-| Combat | Low health | On | 60% | Heartbeat |
-| Combat | Explosions | On | 100% | Rumble burst |
-| Combat | Melee swings | On | 40% | Tap |
-| Combat | Enemy down | On | 45% | Double tap |
-| Combat | Grabs & takedowns | On | 55% | Thud |
-| Combat | Combat starts | On | 35% | Alarm |
-| Combat | Charging a shot | On | 40% | Rumble |
-| Combat | Reloads | On | 20% | Tap |
-| Combat | Weapon overheat | On | 60% | Rumble burst |
-| Status effects | Burning | On | 50% | Rumble |
-| Status effects | Electrocuted & EMP | On | 45% | Flutter |
-| Status effects | Poisoned & bleeding | On | 30% | Throb |
-| Status effects | Knocked down & stunned | On | 70% | Thud |
-| Status effects | Blinded | On | 50% | Rumble burst |
-| Status effects | Relic glitches | On | 50% | Glitch |
-| Cyberware | Sandevistan & Kerenzikov | On | 45% | Wave |
-| Cyberware | Berserk | On | 60% | Throb |
-| Cyberware | Quickhack upload | On | 25% | Flutter |
-| Cyberware | Optical camo | Off | 20% | Wave |
-| Movement | Sprinting | On | 20% | Footsteps |
-| Movement | Jumps | On | 30% | Tap |
-| Movement | Landings | On | 55% | Thud |
-| Movement | Dodges & slides | On | 35% | Tap |
-| Movement | Running out of air | On | 50% | Heartbeat |
-| Driving | Engine | On | 30% | Rumble |
-| Driving | Crashes | On | 100% | Thud |
-| Driving | Drifting | On | 45% | Rumble |
-| Driving | Gear shifts | Off | 20% | Tap |
-| Rewards & world | Police heat | On | 60% | Alarm |
-| Rewards & world | Level up | On | 70% | Fanfare |
-| Rewards & world | Quest completed | On | 50% | Fanfare |
-| Rewards & world | Eddies received | On | 30% | Tap |
-| Rewards & world | Healing | On | 35% | Swell |
-| Rewards & world | Loot pickups | Off | 15% | Tap |
-| Rewards & world | Incoming calls | On | 40% | Phone ring |
-| Scenes | Romance scenes | On | 80% | Follow the scene |
-| Scenes | Joytoys | On | 80% | Follow the scene |
-| Scenes | Braindances | Off | 30% | Wave |
-| Scenes | Other mods | On | 80% | Swell |
+| Group | Interaction | Default |
+|---|---|---|
+| Combat | Gunfire | 45%, Kick |
+|  | Getting hit | 90%, Thud |
+|  | Low health | 60%, Heartbeat |
+|  | Explosions | 100%, Shockwave |
+|  | Melee swings | 45%, Kick |
+|  | Enemy down | 45%, Double tap |
+|  | Grabs & takedowns | 55%, Thud |
+|  | Combat starts | 35%, Alarm |
+|  | Charging up | 40%, Rumble |
+|  | Reloads | 20%, Tap |
+|  | Weapon overheat | 60%, Rumble burst |
+|  | Blocks & parries | 45%, Kick |
+|  | Grenade throws | 30%, Ramp |
+|  | Hits landed | 20%, Tap, off |
+| Status effects | Burning | 50%, Rumble |
+|  | Electrocuted & EMP | 45%, Flutter |
+|  | Poisoned & bleeding | 30%, Throb |
+|  | Knocked down & stunned | 70%, Thud |
+|  | Blinded | 50%, Rumble burst |
+|  | Relic glitches | 50%, Glitch |
+|  | Being hacked | 40%, Static |
+| Cyberware | Sandevistan & Kerenzikov | 35%, Wave |
+|  | Berserk | 55%, Build |
+|  | Quickhack upload | 25%, Flutter |
+|  | Optical camo | 20%, Wave, off |
+| Movement | Sprinting | 20%, Footsteps |
+|  | Jumps | 30%, Tap |
+|  | Landings | 55%, Thud |
+|  | Dodges & slides | 35%, Tap |
+|  | Climbs & vaults | 30%, Kick |
+|  | Out of stamina | 35%, Ripple |
+|  | Running out of air | 50%, Heartbeat |
+| Driving | Engine | 25%, Rumble |
+|  | Crashes | 100%, Shockwave |
+|  | Drifting | 45%, Rumble |
+|  | Gear shifts | 20%, Tap, off |
+| Rewards & world | Police heat | 60%, Alarm |
+|  | Level up | 70%, Fanfare |
+|  | Quest completed | 50%, Fanfare |
+|  | Eddies received | 30%, Tap |
+|  | Healing | 35%, Swell |
+|  | Loot pickups | 15%, Tap, off |
+|  | Incoming calls | 40%, Phone ring |
+| Scenes | Romance scenes | 80%, Follow the scene |
+|  | Joytoys | 80%, Follow the scene |
+|  | Braindances | 30%, Wave, off |
+|  | Other mods | 80%, Swell |
 
 </details>
 
 ## Scenes
 
-- **Romance scenes:** Judy, Kerry, Panam, River and Meredith Stout each have their own track.
-  **Follow the scene** uses each scene's timeline and accents instead of the old generic
-  two-minute build. Panam also uses live pulses from the tank's neural-link sequence.
-- **Joytoys:** Jig-Jig Street and Heywood scenes restart their track at each clip. The feel
-  recreates the game's heavy/light rumble and pause pattern; it does not read native rumble
-  output directly.
-- **Censored scenes:** Judy, Kerry and Panam automatically use shorter tracks when the game's
-  censorship fact selects that cut. River and Stout use their normal tracks.
-- Scene-end signals fade the track over 1.5 seconds. Existing romance or relationship facts are
-  treated as a baseline when sampling starts, so loading a save after a romance does not replay it.
-  Romance scenes and Joytoys both default to On, 80% strength and **Follow the scene**. You can
-  choose another feel for either interaction.
+- **Romance:** Judy, Kerry, Panam, River and Meredith Stout each have their own track. Judy, Kerry
+  and Panam switch to shorter tracks for the censored cut.
+- **Joytoys:** Jig-Jig Street and Heywood restart their track at each clip, in the game's own
+  rumble rhythm.
+- Tracks fade out when a scene ends. Loading a save after a romance doesn't replay it.
 
 ## Troubleshooting
 
-- **Device not found:** close its phone app, which holds the connection. Then press **Scan** under
-  Devices. On Linux, Bluetooth must be on (BlueZ).
-- **`start.cmd` says Python is missing:** install it from python.org, and keep the "py launcher"
+- **Device not found:** close its phone app, then press **Scan**. On Linux, turn Bluetooth on.
+- **`start.cmd` says Python is missing:** install it from python.org with the "py launcher"
   option ticked.
-- **Old romance feel after updating:** choose **Follow the scene** for Romance scenes, or reset
-  the interactions. Saved choices take precedence over new defaults.
-- **Logs:** `%LOCALAPPDATA%\NightCityHaptics\` on Windows, or `~/.local/share/night-city-haptics/`
-  on Linux.
+- **Logs:** `%LOCALAPPDATA%\NightCityHaptics\` (Windows) or `~/.local/share/night-city-haptics/`
+  (Linux).
 
 ## Privacy
 
-The control page is served only on `127.0.0.1:19870`; its controls reject cross-site requests.
-The app has no telemetry and no accounts. By default, its server connection stays on your PC.
-The optional engine download comes from Intiface's official GitHub release only when you click
-Download engine. If you set a remote Intiface address, the app connects to that server.
+The control page is served only on `127.0.0.1:19870` and rejects cross-site requests. There is no
+telemetry and no account. The app connects to the internet only when you click Download engine,
+which fetches Intiface's official GitHub release.
 
 ## For mod authors
 
 Other CET mods can send a pulse through the **Other mods** interaction:
 
 ```lua
-GetMod("nightCityHaptics").Pulse(0.8, 2)   -- strength 0–1, positive seconds (optional)
+GetMod("nightCityHaptics").Pulse(0.8, 2)   -- strength 0–1, optional seconds
 ```
-
-## How it works
-
-The CET mod (`init.lua`) only observes the game and never talks to hardware. It samples about
-30 times a second, rounds levels to two decimal places, and writes `state.json` when events or
-state change, or every 0.2 seconds as a heartbeat. Unchanged state therefore needs five writes a
-second rather than 30.
-
-The companion (`nch.py`, pure Python standard library) reads that file, mixes the result into one
-output and drives devices through the Buttplug protocol. Its loop runs at 30 Hz while the game is
-live or a preview is playing, and 10 Hz when idle. The control page reuses HTTP connections, and
-`status.json` is written only on change or once a second.
-
-Game-driven output requires a heartbeat whose sequence advanced within the last second. A file
-left over from an earlier session is only a baseline; it cannot replay old events. Game feedback
-stops when the heartbeat expires or the gameplay gate closes. Deliberate previews are separate,
-as described above.
 
 ## Development
 
-Tests need LuaJIT and `websockets>=15,<17`. Linux E2E also needs
-Intiface Engine, `unshare`, `ip`, and working user/network namespaces.
+The CET mod only reads the game and writes `state.json`. The companion (`nch.py`, standard library
+only) mixes that into device output over the Buttplug protocol. It stops when the game's heartbeat
+does.
 
 ```sh
-luajit tests/cet_harness.lua                  # the real init.lua against a stubbed CET + game
-python3 -m pip install 'websockets>=15,<17'     # tests only; no extra runtime packages
+luajit tests/cet_harness.lua
+python3 -m pip install 'websockets>=15,<17'          # tests only
 python3 -m unittest discover -s tests
-python3 tools/build.py --output-dir .build/candidate  # game-relative ZIP + manifest
-python3 tools/e2e_intiface.py                 # Linux: real Intiface Engine + simulated device
+python3 tools/build.py --output-dir .build/candidate
+python3 tools/e2e_intiface.py                        # Linux: real Intiface Engine + simulated device
 ```
 
 ## Status
 
-Prototype (0.2.4). Latest fixes are in source; the packaged ZIP is the earlier build.
-Gameplay, scene timing and physical feedback still need playtesting.
+Version 0.3.0. Gameplay, scene timing and physical devices still need wider playtesting.
 
 Built on [Buttplug / Intiface](https://buttplug.io) by Nonpolynomial.

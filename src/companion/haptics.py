@@ -10,6 +10,7 @@ import math
 
 EVENT_MAX_AGE = 1.5  # seconds; older events in a heartbeat are ignored
 RELEASE = 1.5        # seconds a scene track takes to fade when its scene ends
+CHANNELS = ("vibrate", "rotate", "oscillate", "stroke", "constrict", "heat", "light")
 CUE_RISE, CUE_FALL = .06, .64  # shape of one cue pulse in a scene track
 
 
@@ -76,7 +77,8 @@ def texture(name, t, level=1., seed=0.):
     if name == "throb":
         return 1. if (t / .7) % 1 < .5 else .15
     if name == "flutter":
-        return 1. if (t / .2) % 1 < .5 else 0.
+        # 4 Hz: slow enough for Bluetooth motors to follow; the low floor keeps them spinning.
+        return 1. if (t / .25) % 1 < .5 else .15
     if name == "footsteps":
         return 1. if (t / .36) % 1 < .3 else 0.
     if name == "ring":
@@ -85,10 +87,20 @@ def texture(name, t, level=1., seed=0.):
         return 1. if phase < .4 or .6 <= phase < 1. else 0.
     if name == "glitch":
         # Irregular stutter, like the relic's screen glitches.
-        step = math.floor(t * 18)
+        step = math.floor(t * 10)
         return .5 + .5 * _rand(step + .37) if _rand(step) > .45 else 0.
     if name == "joytoy":
         return _joytoy(t, seed)
+    if name == "pulse":
+        # A smooth, quicker breath than Wave: about 1.2 s per swell.
+        return .2 + .8 * (1 - math.cos(t / 1.2 * 2 * math.pi)) / 2
+    if name == "build":
+        # Starts at a third and climbs to full over eight seconds while it lasts.
+        return min(1., .35 + .65 * t / 8)
+    if name == "static":
+        # Crackle: short random blips, about ten a second, never fully smooth.
+        step = math.floor(t * 10)
+        return .35 + .65 * _rand(step + .71) if _rand(step + .13) > .3 else .1
     if name == "heartbeat":
         # Quickens from 60 to 110 bpm as the level rises.
         phase = (t / (1. - .45 * clamp(level))) % 1
@@ -143,11 +155,14 @@ def normalize_settings(raw, catalog):
     if isinstance(devices, dict):
         for name, options in devices.items():
             if isinstance(name, str) and isinstance(options, dict) and len(settings["devices"]) < 64:
-                settings["devices"][name] = {
-                    "on": options.get("on") is not False,
-                    "strength": clamp(options.get("strength", 1.)),
-                    "all_motors": options.get("all_motors") is True,
-                }
+                device = {"on": options.get("on") is not False, "strength": clamp(options.get("strength", 1.))}
+                # 0.2.x "All motors"; kept so those devices keep their outputs until changed.
+                if options.get("all_motors") is True:
+                    device["all_motors"] = True
+                outputs = options.get("outputs")
+                if isinstance(outputs, dict):
+                    device["outputs"] = {c: outputs[c] for c in CHANNELS if isinstance(outputs.get(c), bool)}
+                settings["devices"][name] = device
     return settings
 
 
@@ -163,6 +178,32 @@ def blend(values, cap):
     for value in active:
         remaining *= 1 - value / cap
     return cap * (1 - remaining)
+
+
+def preview(catalog, kind, feel, samples=48):
+    """A feel's shape for the control page: `samples` values in 0..1.
+
+    Short event feels share one 1.5 s scale so they compare at a glance; longer ones span their
+    own length (a scene its first 40 s). Level feels show 3 s of texture."""
+    if kind == "level":
+        span = 3.
+        return [round(texture(feel, i * span / samples, .7, seed=1.), 3) for i in range(samples)]
+    effect = next((f for f in catalog["feels"]["event"] if f["id"] == feel), None)
+    if effect is None:
+        return [0.] * samples
+    length = effect["points"][-1][0]
+    span = 40. if feel == "scene" else 1.5 if length <= 1.5 else min(40., length)
+    if feel == "scene":
+        effect = catalog["tracks"]["judy"]
+    mixer = Mixer(catalog)
+    mixer.effects["_preview"] = effect
+    voice = {"start": 0., "magnitude": 1., "feel": "_preview", "scale": 1.}
+    peak = []
+    for i in range(samples):
+        # Each bar shows the peak of its slice so short taps never vanish.
+        values = [mixer._voice_value(voice, (i + j / 4) * span / samples) for j in range(4)]
+        peak.append(round(max(values), 3))
+    return peak
 
 
 class Mixer:

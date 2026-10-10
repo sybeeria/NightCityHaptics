@@ -42,6 +42,7 @@ class RecordingClient:
         self.errors = []
         self.server_name = "Offline fixture"
         self.closed = False
+        self.battery = {}
 
     def send(self, kind, fields, device=None):
         self.commands.append((kind, fields))
@@ -137,6 +138,35 @@ class AppRegressions(unittest.TestCase):
     def tearDown(self):
         self.folder.cleanup()
 
+    def test_device_output_switches_merge_validate_and_show_in_the_snapshot(self):
+        key = buttplug.settings_key(self.client.devices[1])
+        self.client.devices[1]["DeviceMessages"]["ScalarCmd"].append({"ActuatorType": "Temperature", "StepCount": 1})
+        self.app.save({"devices": {key: {"outputs": {"heat": True}}}})
+        self.app.save({"devices": {key: {"outputs": {"vibrate": False}}}})
+        self.assertEqual(self.app.settings["devices"][key]["outputs"], {"vibrate": False, "heat": True})
+        for bad in ({"spray": True}, {"heat": "on"}, ["heat"]):
+            with self.subTest(outputs=bad), self.assertRaises(ValueError):
+                self.app.save({"devices": {key: {"outputs": bad}}})
+        self.client.battery[1] = .5
+        info = self.app.snapshot()["devices"][0]
+        self.assertEqual(info["channels"], {"vibrate": 1, "heat": 1})
+        self.assertEqual(info["settings"]["outputs"], {"vibrate": False, "heat": True})
+        self.assertEqual(info["battery"], .5)
+
+    def test_nothing_playing_stops_slow_outputs_at_once(self):
+        key = buttplug.settings_key(self.client.devices[1])
+        self.client.devices[1]["DeviceMessages"]["ScalarCmd"] = [{"ActuatorType": "Constrict", "StepCount": 20}]
+        self.app.save({"devices": {key: {"outputs": {"constrict": True}}}})
+        self.app.try_interaction("explosion")
+        start = self.app.mixer.voices["try:explosion"]["start"]
+        for i in range(40):
+            self.app.tick(start + i / 30)
+        squeezed = [s["Scalar"] for kind, f in self.client.commands if kind == "ScalarCmd" for s in f["Scalars"]]
+        self.assertGreater(max(squeezed), 0)
+        for i in range(40, 80):
+            self.app.tick(start + i / 30)
+        self.assertEqual(self.client.commands[-2][0], "StopDeviceCmd", "the preview ended, nothing else can play")
+
     def beat(self, seq, now, **fields):
         (self.mod / "state.json").write_text(json.dumps(heartbeat(seq, **fields)))
         self.app.tick(now)
@@ -147,7 +177,7 @@ class AppRegressions(unittest.TestCase):
         app = nch.App(self.mod, self.path)
         self.assertFalse(app.settings["enabled"])
         self.assertEqual(app.settings["max_strength"], .1)
-        self.assertEqual(len(app.settings["interactions"]), 41)
+        self.assertEqual(len(app.settings["interactions"]), len(app.catalog["interactions"]))
 
     def test_corrupt_state_after_positive_output_sends_zero(self):
         self.beat(1, 0.)

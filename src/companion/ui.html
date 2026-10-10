@@ -69,8 +69,6 @@ a{color:var(--ink)}
 .pill.on:hover{background:var(--red-dark);border-color:var(--red-dark);color:#fff}
 .pill.small{padding:4px 14px;min-height:34px;font-size:14px}
 .pill:disabled,.pill.on:disabled{opacity:1;cursor:default;border-color:var(--rule);color:var(--faint);background:var(--paper)}
-#theme[aria-pressed=true]{background:var(--ink);color:var(--paper)}
-#theme[aria-pressed=true]:hover{background:var(--red-solid);border-color:var(--red-solid);color:#fff}
 .link{background:none;border:0;padding:6px 0;cursor:pointer;font-size:14px;color:var(--grey)}
 .link:hover{color:var(--red)}
 
@@ -91,7 +89,17 @@ input[type=range]::-moz-range-track{height:2px;background:linear-gradient(90deg,
 input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:14px;height:14px;margin-top:-6px;border-radius:50%;background:var(--fill);border:0}
 input[type=range]::-moz-range-thumb{width:14px;height:14px;border-radius:50%;background:var(--fill);border:0}
 input[type=range].limit{--fill:var(--red)}
-input[type=checkbox]{width:20px;height:20px;margin:0;accent-color:var(--ink);cursor:pointer;flex:none}
+/* switch: a small pill track, filled with ink when on. Red stays for On/Off, live and the limit. */
+.switch{position:relative;width:40px;height:24px;flex:none;border:2px solid var(--ink);border-radius:999px;background:var(--paper);padding:0;cursor:pointer}
+.switch::after{content:"";position:absolute;top:3px;left:3px;width:14px;height:14px;border-radius:50%;background:var(--ink);transition:transform .12s}
+.switch[aria-checked=true]{background:var(--ink)}
+.switch[aria-checked=true]::after{background:var(--paper);transform:translateX(16px)}
+.switch:hover{border-color:var(--red)}
+.switch[aria-checked=true]:hover{background:var(--red-solid);border-color:var(--red-solid)}
+/* a pill that is a selected option (device outputs, dark mode) */
+.pill.sel,#theme[aria-pressed=true]{background:var(--ink);color:var(--paper)}
+.pill.sel:hover,#theme[aria-pressed=true]:hover{background:var(--red-solid);border-color:var(--red-solid);color:#fff}
+.check .switch{margin-right:4px}
 select{--select-ink:var(--ink);background:var(--paper);border:0;border-bottom:1px solid var(--select-ink);border-radius:0;padding:2px 18px 2px 0;font-size:14px;cursor:pointer;
   -webkit-appearance:none;appearance:none;
   background-image:linear-gradient(45deg,transparent 50%,var(--select-ink) 50%),linear-gradient(135deg,var(--select-ink) 50%,transparent 50%);
@@ -118,21 +126,26 @@ input:disabled,select:disabled{color:var(--faint);cursor:default}
 .cat.open .list{display:block}
 .cat .tog{flex:1;background:none;border:0;padding:0;cursor:pointer;text-align:left}
 .cat .tog:hover .sub{color:var(--red)}
-.row{display:grid;grid-template-columns:28px minmax(0,1fr) 52px 60px;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--rule)}
-.row .ctl{display:flex;align-items:center;gap:12px;margin-top:6px}
-.row select{width:132px;flex:none}
-.row .num{transition:color .1s}
+.row{display:grid;grid-template-columns:40px minmax(0,1fr) 44px 60px;gap:8px 16px;align-items:center;padding:12px 0;border-bottom:1px solid var(--rule)}
+.row .name{font-size:18px}
+.row .desc{max-width:62ch;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.row .ctl{display:grid;grid-template-columns:120px 72px minmax(0,1fr);align-items:center;gap:16px;margin-top:8px}
+.row .num{font-size:21px;transition:color .1s}
 .row.live .num{color:var(--red)}
 .row.off .name,.row.off .num{color:var(--faint)}
 .row.off .ctl{color:var(--faint)}
 .row.off select{--select-ink:var(--faint)}
 .row.off input[type=range]{--fill:var(--faint)}
+/* the feel's shape, sampled from the mixer itself */
+.shape{display:block;width:72px;height:24px}
 
 /* devices */
 .dev{display:flex;flex-direction:column;gap:12px;padding:12px 0 16px;border-bottom:1px solid var(--rule)}
 .dev .id{display:flex;justify-content:space-between;align-items:baseline;gap:12px}
 .dev .foot{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px 24px}
 .dev .opts{display:flex;flex-wrap:wrap;gap:8px 24px}
+.dev .outs{display:flex;flex-wrap:wrap;gap:8px}
+.dev .outs .pill{min-height:34px}
 .empty{padding:4px 0 16px;display:flex;flex-direction:column;gap:4px}
 #scanstate:not(:empty){padding:12px 0}
 
@@ -158,9 +171,11 @@ footer{margin-top:48px;display:flex;flex-wrap:wrap;justify-content:space-between
 }
 @media (max-width:560px){
   .page{padding:24px 16px 32px}
-  .row{grid-template-columns:28px minmax(0,1fr) 60px;row-gap:4px}
+  .row{grid-template-columns:40px minmax(0,1fr) 60px;row-gap:4px}
   .row > :nth-child(-n+2){grid-row:1/3}
   .row .try{grid-column:3;grid-row:2}
+  .row .ctl{grid-template-columns:minmax(0,1fr) 72px;row-gap:8px}
+  .row .ctl input[type=range]{grid-column:1/-1}
   #why{max-width:55%}
 }
 @media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
@@ -207,7 +222,7 @@ footer{margin-top:48px;display:flex;flex-wrap:wrap;justify-content:space-between
         <div class="settings" id="setbody" hidden>
           <div>
             <h3 class="sub">Intiface</h3>
-            <label class="check"><input type="checkbox" id="autostart">Start Intiface Engine when no Intiface app is running</label>
+            <div class="check"><button class="switch" role="switch" id="autostart" aria-checked="false" aria-labelledby="autostart-l"></button><span id="autostart-l">Start Intiface Engine when no Intiface app is running</span></div>
             <label for="address" class="meta">Address</label>
             <input type="text" id="address" spellcheck="false">
             <p class="meta" id="enginepath"></p>
@@ -262,9 +277,13 @@ function applySettings(change) {
   for (const [key, value] of Object.entries(change)) {
     if (key === 'interactions' || key === 'devices') {
       for (const [name, options] of Object.entries(value)) {
-        S.settings[key][name] = {...S.settings[key][name], ...options};
+        const merged = {...S.settings[key][name], ...options};
+        if (options.outputs) merged.outputs = {...(S.settings[key][name] || {}).outputs, ...options.outputs};
+        S.settings[key][name] = merged;
         if (key === 'devices') for (const d of S.devices) {
-          if ((d.settings_key || d.key) === name) Object.assign(d.settings, options);
+          if ((d.settings_key || d.key) !== name) continue;
+          const outputs = options.outputs ? {...d.settings.outputs, ...options.outputs} : d.settings.outputs;
+          Object.assign(d.settings, options, {outputs});
         }
       }
     } else S.settings[key] = value;
@@ -359,11 +378,25 @@ function slider(value, key, label, onchange) {
   return r;
 }
 function setSlider(r, value, key) { if (!editing.has(key)) { r.value = pct(value); fill(r); } }
-function checkbox(checked, label, onchange) {
-  const c = el('input', {type: 'checkbox', checked});
-  c.setAttribute('aria-label', label);
-  c.addEventListener('change', () => onchange(c.checked));
-  return c;
+function setSwitch(b, on) { b.setAttribute('aria-checked', on ? 'true' : 'false'); }
+function toggle(checked, label, onchange) {
+  const b = el('button', {className: 'switch', type: 'button'});
+  b.setAttribute('role', 'switch'); b.setAttribute('aria-label', label); setSwitch(b, checked);
+  b.addEventListener('click', () => { const on = b.getAttribute('aria-checked') !== 'true'; setSwitch(b, on); onchange(on); });
+  return b;
+}
+// A feel's shape: the envelope of the mixer's own samples (catalog.previews) on a baseline.
+function drawShape(c, values, colour) {
+  const g = c.getContext('2d'), dpr = devicePixelRatio || 1;
+  const w = c.width = Math.round(c.clientWidth * dpr), h = c.height = Math.round(c.clientHeight * dpr);
+  g.clearRect(0, 0, w, h);
+  if (!values || !w) return;
+  const step = w / values.length, top = 2 * dpr;
+  g.fillStyle = colour;
+  g.beginPath(); g.moveTo(0, h);
+  values.forEach((v, i) => { const y = h - v * (h - top); g.lineTo(i * step, y); g.lineTo((i + 1) * step, y); });
+  g.lineTo(w, h); g.closePath(); g.fill();
+  g.fillRect(0, h - dpr, w, dpr);
 }
 function button(text, onclick, className = 'pill small') {
   return el('button', {className, textContent: text, onclick: () => Promise.resolve().then(onclick).catch(() => {})});
@@ -392,17 +425,21 @@ function buildInteractions() {
     const list = el('div', {className: 'list'});
     for (const item of items) {
       const r = rows[item.id] = {item, box, count};
-      r.on = checkbox(false, item.label + ' on', on => save({interactions: {[item.id]: {on}}}, item.id + 'on'));
+      r.on = toggle(false, item.label, on => save({interactions: {[item.id]: {on}}}, item.id + 'on'));
       r.feel = el('select');
       r.feel.setAttribute('aria-label', item.label + ' feel');
       for (const f of catalog.feels[item.kind]) if (!f.for || f.for.includes(item.id)) r.feel.append(new Option(f.label, f.id));
-      r.feel.onchange = () => save({interactions: {[item.id]: {feel: r.feel.value}}}, item.id + 'feel');
+      r.feel.onchange = () => { save({interactions: {[item.id]: {feel: r.feel.value}}}, item.id + 'feel'); r.drawn = null; };
+      r.shape = el('canvas', {className: 'shape'});
+      r.shape.setAttribute('aria-hidden', 'true');
       r.num = el('span', {className: 'num'});
       r.range = slider(0, item.id, item.label + ' strength', v => { r.num.textContent = pct(v); save({interactions: {[item.id]: {strength: v}}}, item.id + 'str', 250); });
       r.try = button('Try', () => api('try', {id: item.id}), 'pill small try');
       r.try.title = 'Play it on your device now';
       r.row = el('div', {className: 'row'}, r.on,
-        el('div', {}, el('div', {className: 'name', textContent: item.label, title: item.description}), el('div', {className: 'ctl'}, r.feel, r.range)),
+        el('div', {}, el('div', {className: 'name', textContent: item.label}),
+          el('p', {className: 'desc meta', textContent: item.description, title: item.description}),
+          el('div', {className: 'ctl'}, r.feel, r.shape, r.range)),
         r.num, r.try);
       list.append(r.row);
     }
@@ -422,12 +459,20 @@ function updateInteractions() {
     total += s.on;
     if (!r.box.classList.contains('open')) continue;
     r.row.classList.toggle('off', !s.on);
-    r.on.checked = s.on;
+    setSwitch(r.on, s.on);
     if (document.activeElement !== r.feel) r.feel.value = s.feel;
     setSlider(r.range, s.strength, id);
     if (!editing.has(id)) r.num.textContent = pct(s.strength);
-    r.row.classList.toggle('live', (S.contributions[id] || 0) + (S.contributions['try:' + id] || 0) > .01);
+    const live = (S.contributions[id] || 0) + (S.contributions['try:' + id] || 0) > .01;
+    r.row.classList.toggle('live', live);
     r.try.disabled = !S.settings.enabled;
+    // Redraw the shape only when its feel, state or palette changes.
+    const look = r.feel.value + (live ? ' live' : s.on ? ' on' : ' off') + document.documentElement.dataset.theme;
+    if (r.drawn !== look) {
+      const css = getComputedStyle(document.documentElement);
+      drawShape(r.shape, (catalog.previews || {})[r.item.kind]?.[r.feel.value], css.getPropertyValue(live ? '--red' : s.on ? '--ink' : '--faint'));
+      r.drawn = look;
+    }
   }
   for (const [count, [on, all]] of perCat) count.textContent = on + ' / ' + all;
   $('icount').textContent = total + ' of ' + catalog.interactions.length + ' on';
@@ -436,13 +481,18 @@ function updateInteractions() {
 // ---- devices ----
 let deviceKeys = null;
 const deviceRows = new Map();
-function motorSummary(motors) {
-  const n = {};
-  motors.forEach(m => n[m] = (n[m] || 0) + 1);
-  return Object.entries(n).map(([m, k]) => (k > 1 ? k + ' × ' : '') + m.toLowerCase()).join(', ');
-}
+// Each kind of output a toy can have. Squeeze and heat follow the mix slowly and start off.
+const OUTPUTS = {
+  vibrate: ['Vibrate', 'Vibration motors follow the mix.'],
+  rotate: ['Rotate', 'Rotation follows the mix; a sudden hit reverses the spin.'],
+  oscillate: ['Thrust', 'Thrusting and oscillating motors follow the mix.'],
+  stroke: ['Stroke', 'Strokers move faster and further as the mix rises.'],
+  constrict: ['Squeeze', 'Suction and air pumps ease toward the mix over a second or two. Off until you switch it on.'],
+  heat: ['Heat', 'Warms with sustained feedback and cools off after. Off until you switch it on.'],
+  light: ['Light', 'Lights follow the mix.'],
+};
 function updateDevices() {
-  const keys = JSON.stringify(S.devices.map(d => [d.key, d.settings_key, d.name, d.motors, d.extra_motors]));
+  const keys = JSON.stringify(S.devices.map(d => [d.key, d.settings_key, d.name, d.channels]));
   if (keys !== deviceKeys) {
     deviceKeys = keys;
     const list = $('devlist');
@@ -455,26 +505,41 @@ function updateDevices() {
       const set = d.settings;
       const settingsKey = d.settings_key || d.key;
       const num = el('span', {className: 'num', textContent: pct(set.strength)});
-      const on = checkbox(set.on, 'Use ' + d.name, v => save({devices: {[settingsKey]: {on: v}}}, d.key + 'on'));
-      const all = d.extra_motors ? checkbox(set.all_motors, 'Drive every motor', v => save({devices: {[settingsKey]: {all_motors: v}}}, d.key + 'm')) : null;
+      const on = toggle(set.on, 'Use ' + d.name, v => save({devices: {[settingsKey]: {on: v}}}, d.key + 'on'));
+      const outs = {};
+      for (const [channel, count] of Object.entries(d.channels || {})) {
+        const [label, help] = OUTPUTS[channel] || [channel, ''];
+        const b = el('button', {className: 'pill small', type: 'button', textContent: label + (count > 1 ? ' ×' + count : ''), title: help});
+        b.onclick = () => {
+          const value = b.getAttribute('aria-pressed') !== 'true';
+          save({devices: {[settingsKey]: {outputs: {[channel]: value}}}}, d.key + 'out' + channel);
+        };
+        outs[channel] = b;
+      }
       const strength = slider(set.strength, 'dev' + d.key, d.name + ' strength', v => {
         num.textContent = pct(v); save({devices: {[settingsKey]: {strength: v}}}, d.key + 's', 250);
       });
-      const opts = el('div', {className: 'opts'},
-        el('label', {className: 'check'}, on, 'Use this device'));
-      if (all) opts.append(el('label', {className: 'check'}, all, 'All motors'));
+      const battery = el('span', {className: 'meta'});
+      const outputs = el('div', {className: 'outs', role: 'group'}, ...Object.values(outs));
+      outputs.setAttribute('aria-label', d.name + ' outputs');
       list.append(el('div', {className: 'dev'},
-        el('div', {className: 'id'}, el('span', {className: 'name', textContent: d.name}), el('span', {className: 'meta', textContent: motorSummary(d.motors)})),
+        el('div', {className: 'id'}, el('span', {className: 'name', textContent: d.name}), battery),
         el('div', {className: 'level'}, el('span', {textContent: 'Strength'}),
           strength, num),
-        el('div', {className: 'foot'}, opts, button('Test', () => api('test-device', {key: d.key})))));
-      deviceRows.set(d.key, {on, all, strength, num});
+        outputs,
+        el('div', {className: 'foot'}, el('div', {className: 'check'}, on, el('span', {textContent: 'Use this device'})),
+          button('Test', () => api('test-device', {key: d.key})))));
+      deviceRows.set(d.key, {on, outs, strength, num, battery});
     }
   }
   for (const d of S.devices) {
     const row = deviceRows.get(d.key), key = 'dev' + d.key;
-    row.on.checked = d.settings.on;
-    if (row.all) row.all.checked = d.settings.all_motors;
+    setSwitch(row.on, d.settings.on);
+    for (const [channel, b] of Object.entries(row.outs)) {
+      const active = !!(d.settings.outputs || {})[channel];
+      b.setAttribute('aria-pressed', active); b.classList.toggle('sel', active);
+    }
+    row.battery.textContent = typeof d.battery === 'number' ? 'Battery ' + pct(d.battery) + '%' : '';
     setSlider(row.strength, d.settings.strength, key);
     if (!editing.has(key)) row.num.textContent = pct(d.settings.strength);
   }
@@ -519,7 +584,7 @@ function updateStatus() {
   $('why').textContent = names.length ? [...new Set(names)].join(', ')
     : !on ? 'Feedback is off' : S.game === 'live' ? 'Nothing playing' : 'Press Try to feel an interaction';
   if (document.activeElement !== $('address')) $('address').value = S.settings.intiface_address;
-  $('autostart').checked = S.settings.start_intiface;
+  setSwitch($('autostart'), S.settings.start_intiface);
   $('enginepath').textContent = S.engine_path ? 'Intiface Engine installed.' : 'Intiface Engine is not installed. Download it, or run Intiface Central yourself.';
   $('enginepath').title = S.engine_path || '';
   $('download').hidden = !!S.engine_path;
@@ -573,7 +638,7 @@ function updateTheme(theme) {
   const dark = theme === 'dark';
   $('theme').setAttribute('aria-pressed', dark);
   $('theme').title = 'Switch to ' + (dark ? 'light' : 'dark') + ' mode';
-  if (S) drawBars();
+  if (S) update();
 }
 updateTheme(document.documentElement.dataset.theme);
 $('theme').onclick = () => {
@@ -605,7 +670,7 @@ track($('master'), 'master', v => { $('masterv').textContent = pct(v); save({max
 $('scan').onclick = () => api('scan').catch(() => {});
 $('reconnect').onclick = () => api('reconnect').then(() => toast('Reconnecting')).catch(() => {});
 $('download').onclick = () => api('download-engine').catch(() => {});
-$('autostart').onchange = e => save({start_intiface: e.target.checked}, 'auto');
+$('autostart').onclick = () => save({start_intiface: $('autostart').getAttribute('aria-checked') !== 'true'}, 'auto');
 $('address').onchange = e => save({intiface_address: e.target.value.trim()}, 'addr');
 $('reset').onclick = () => { if (confirm('Reset every interaction to its default?')) api('reset').then(() => toast('Defaults restored')).catch(() => {}); };
 $('quit').onclick = () => { if (confirm('Stop all devices and close Night City Haptics?')) api('quit').then(() => setTimeout(() => $('offline').classList.add('show'), 600)).catch(() => {}); };

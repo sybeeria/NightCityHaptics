@@ -108,6 +108,7 @@ local enums = {
   gamePSMTakedown = {"Default", "EnteringGrapple", "Grapple", "Leap", "Takedown"},
   gamePSMRangedWeaponStates = {"Default", "Charging", "Reload", "QuickMelee", "NoAmmo", "Ready", "Safe", "Overheat", "Shoot"},
   gamePSMSwimming = {"Default", "Surface", "Diving", "Climbing"},
+  gamePSMCombatGadget = {"Default", "EquipRequest", "Equipped", "Charging", "Throwing", "WaitForUnequip", "QuickThrow"},
   questPhoneCallPhase = {"Undefined", "IncomingCall", "StartCall", "EndCall"},
   EInkAnimationPlaybackOption = {"PLAY", "STOP", "PAUSE", "RESUME", "CONTINUE", "GO_TO_START", "GO_TO_END"},
   gamedataItemType = {"Clo_Face", "Clo_Feet", "Clo_Head", "Clo_InnerChest", "Clo_Legs", "Clo_OuterChest", "Clo_Outfit", "Con_Ammo", "Con_Edible", "Con_Inhaler", "Con_Injector", "Con_LongLasting", "Con_Skillbook", "Cyb_Ability", "Cyb_HealingAbility", "Cyb_Launcher", "Cyb_MantisBlades", "Cyb_NanoWires", "Cyb_StrongArms", "Cyberware", "CyberwareStatsShard", "CyberwareUpgradeShard", "Fla_Launcher", "Fla_Rifle", "Fla_Shock", "Fla_Support", "Gad_Grenade", "Gen_CraftingMaterial", "Gen_DataBank", "Gen_Jewellery", "Gen_Junk", "Gen_Keycard", "Gen_Misc", "Gen_MoneyShard", "Gen_Readable", "Gen_Tarot", "GrenadeDelivery", "Grenade_Core", "Prt_AR_SMG_LMGMod", "Prt_BladeMod", "Prt_BluntMod", "Prt_BootsFabricEnhancer", "Prt_Capacitor", "Prt_FabricEnhancer", "Prt_FaceFabricEnhancer", "Prt_Fragment", "Prt_HandgunMod", "Prt_HandgunMuzzle", "Prt_HeadFabricEnhancer", "Prt_LongScope", "Prt_Magazine", "Prt_MeleeMod", "Prt_Mod", "Prt_Muzzle", "Prt_OuterTorsoFabricEnhancer", "Prt_PantsFabricEnhancer", "Prt_PowerMod", "Prt_PowerSniperScope", "Prt_Precision_Sniper_RifleMod", "Prt_Program", "Prt_RangedMod", "Prt_Receiver", "Prt_RifleMuzzle", "Prt_Scope", "Prt_ScopeRail", "Prt_ShortScope", "Prt_ShotgunMod", "Prt_SmartMod", "Prt_Stock", "Prt_TargetingSystem", "Prt_TechMod", "Prt_TechSniperScope", "Prt_ThrowableMod", "Prt_TorsoFabricEnhancer", "VendorToken", "Wea_AssaultRifle", "Wea_Axe", "Wea_Chainsword", "Wea_Fists", "Wea_GrenadeLauncher", "Wea_Hammer", "Wea_Handgun", "Wea_HeavyMachineGun", "Wea_Katana", "Wea_Knife", "Wea_LightMachineGun", "Wea_LongBlade", "Wea_Machete", "Wea_Melee", "Wea_OneHandedClub", "Wea_PrecisionRifle", "Wea_Revolver", "Wea_Rifle", "Wea_ShortBlade", "Wea_Shotgun", "Wea_ShotgunDual", "Wea_SniperRifle", "Wea_SubmachineGun", "Wea_Sword", "Wea_TwoHandedClub", "Wea_VehicleMissileLauncher", "Wea_VehiclePowerWeapon", "Count", "Invalid"},
@@ -126,7 +127,8 @@ local function reset()
     psm = {Locomotion = 0, LocomotionDetailed = 1, Landing = 0, MeleeWeapon = 2, Takedown = 0, Weapon = 0, Swimming = 0},
     phone = nil, oxygen = 100, simTime = 0,
     mounted = false, combat = false, heat = 0, health = 100, effects = {}, uploads = {}, facts = {},
-    speed = 0, gear = 1, handbrake = 0, slip = 0, braindance = false, weapon = "Wea_Shotgun",
+    speed = 0, gear = 1, handbrake = 0, slip = 0, rpm = 0, rpmMax = 0, braindance = false, weapon = "Wea_Shotgun",
+    hacked = false, hackProgress = 0,
     position = {x = 0, y = 0, z = 0}, levels = {Level = 10, Espionage = 0}}
 end
 reset()
@@ -155,7 +157,9 @@ Game = {
   GetBlackboardSystem = function() return {Get = function(_, board) return {GetBool = function(_, key)
     if key == "IsInMenu" then return world.menu end
     if key == "IsActive" then return board == defs.Braindance and world.braindance or board == defs.PhotoMode and world.photo or false end
+    if key == "Active" and board == defs.UI_HUDProgressBar then return world.hacked end
     return false end,
+    GetFloat = function(_, key) if key == "Progress" and board == defs.UI_HUDProgressBar then return world.hackProgress end; return 0 end,
     GetVariant = function(_, key) if key == "PhoneCallInformation" then return world.phone end end} end} end,
   GetTimeSystem = function() return {GetSimTime = function() return world.simTime end, IsPausedState = function() return world.paused end, IsTimeDilationActive = function() return false end} end,
   GetStatPoolsSystem = function() return {GetStatPoolValue = function(_, _, kind) return kind == "Oxygen" and world.oxygen or world.health end, GetStatPoolMaxPointValue = function() return 400 end} end,
@@ -167,7 +171,9 @@ Game = {
   GetMountingFacility = function() return {GetMountingInfoSingleWithIds = function() return {parentId = 1} end} end,
   FindEntityByID = function() return {GetBlackboard = function() return {
     GetInt = function(_, key) if key == "GearValue" then return world.gear end; return world.handbrake end,
-    GetFloat = function() return world.slip end} end} end,
+    GetFloat = function(_, key)
+      if key == "RPMValue" then return world.rpm elseif key == "RPMMax" then return world.rpmMax end
+      return world.slip end} end} end,
   GetQuestsSystem = function() return {GetFactStr = function(_, fact) return world.facts[fact] or 0 end} end,
 }
 GetSingleton = function() return {GetSystemRequestsHandler = function() return {IsPreGame = function() return world.pregame end} end} end
@@ -711,6 +717,61 @@ files["status.json"] = json.encode({running = true, heartbeat = 107, devices = {
 frames(.6); events.onDraw()
 check(displayed == .4, "valid status recovers after malformed snapshots")
 ImGui.ProgressBar = oldProgress; events.onOverlayClose(); frames(.1)
+
+-- 0.3.0 signals: blocks, hits landed, grenades, climbing, stamina, netrunner uploads,
+-- melee charge, charged-shot kick, revs and being hit by a car.
+fresh()
+fire("PlayerPuppet.OnHitBlockedOrDeflected", player, {attackData = {WasDeflectedAny = function() return true end}})
+check(last()[2] == "block" and last()[3] == 1, "a parry or deflection blocks at full strength")
+fire("PlayerPuppet.OnHitBlockedOrDeflected", player, {attackData = {WasDeflectedAny = function() return false end}})
+check(last()[2] == "block" and last()[3] == .65, "a plain block is softer")
+count = #state().events
+fire("PlayerPuppet.OnHitBlockedOrDeflected", other, {attackData = {WasDeflectedAny = function() return true end}})
+check(#state().events == count, "NPC blocks are ignored")
+fire("PlayerPuppet.OnDamageInflicted", player, {}); hooks["PlayerPuppet.OnDamageInflicted"](player, {})
+check(eventIds():gsub("[^,]*block,?", ""):gsub(",$", "") == "hitLanded", "several hits in one frame count once")
+frames(.1); fire("PlayerPuppet.OnDamageInflicted", player, {})
+check(last()[2] == "hitLanded", "a later hit counts again")
+world.psm.CombatGadget = ordinal("gamePSMCombatGadget", "Charging"); frames(.1)
+mark = lastNumber()
+world.psm.CombatGadget = ordinal("gamePSMCombatGadget", "Throwing"); frames(.1)
+check(idsSince(mark) == "throw", "throwing a grenade is reported")
+world.psm.CombatGadget = ordinal("gamePSMCombatGadget", "Default"); frames(.1)
+world.psm.CombatGadget = ordinal("gamePSMCombatGadget", "QuickThrow"); frames(.1)
+check(last()[2] == "throw", "quick throws count too")
+mark = lastNumber()
+world.psm.LocomotionDetailed = ordinal("gamePSMDetailedLocomotionStates", "Climb"); frames(.1)
+world.psm.LocomotionDetailed = ordinal("gamePSMDetailedLocomotionStates", "Stand"); frames(.1)
+world.psm.LocomotionDetailed = ordinal("gamePSMDetailedLocomotionStates", "Vault"); frames(.1)
+check(idsSince(mark) == "climb,climb" and last()[3] == .7, "climbs and softer vaults are reported")
+mark = lastNumber()
+world.effects["BaseStatusEffect.PlayerExhausted"] = true; frames(.2)
+check(idsSince(mark) == "exhausted", "running out of stamina is reported once")
+world.effects["BaseStatusEffect.PlayerExhausted"] = nil
+world.hacked, world.hackProgress = true, .5; frames(.1)
+check(math.abs(state().levels.hacked - .68) < .01, "a netrunner upload builds with its progress")
+world.hacked = false; frames(.1)
+check(state().levels.hacked == 0, "the upload level ends with the bar")
+world.psm.MeleeWeapon = ordinal("gamePSMMeleeWeapon", "Hold"); frames(.5)
+check(state().levels.charge > .25 and state().levels.charge < 1, "holding a melee attack charges up")
+world.psm.MeleeWeapon = ordinal("gamePSMMeleeWeapon", "ChargedHold"); frames(.1)
+check(state().levels.charge == 1, "a fully charged melee attack is full strength")
+world.psm.MeleeWeapon = ordinal("gamePSMMeleeWeapon", "Idle"); frames(.05)
+world.weapon = "Wea_SubmachineGun"
+fire("ShootEvents.OnEnter", nil, nil, {executionOwner = player})
+check(last()[2] == "gunfire" and last()[3] == 1, "a shot fired out of a full charge kicks hard")
+frames(.5); fire("ShootEvents.OnEnter", nil, nil, {executionOwner = player})
+check(last()[3] == .5, "ordinary shots return to the weapon's own kick")
+world.mounted, world.speed, world.rpm, world.rpmMax = true, 0, 4000, 8000; frames(.1)
+check(math.abs(state().levels.engine - (.15 + .85 * .3)) < .01, "revving while standing still follows the RPM")
+world.rpm, world.rpmMax = 2000, 0; frames(.1)
+check(math.abs(state().levels.engine - (.15 + .85 * .15)) < .01, "a missing RPM maximum falls back to 8000")
+world.mounted, world.rpm = false, 0; frames(.1)
+mark = lastNumber()
+world.effects.VehicleKnockdown = true; frames(.1)
+check(idsSince(mark) == "knockdown", "being knocked down by a car counts as a knockdown")
+world.effects.VehicleKnockdown = nil; frames(.1)
+check(next(state().errors) == nil, "new signals raise no runtime errors: " .. tostring(next(state().errors)))
 
 -- Sessions: a new player attachment starts a fresh session and clears its scene.
 world.facts.sq030_sex_done = 1; frames(.1)

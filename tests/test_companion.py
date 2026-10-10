@@ -246,7 +246,20 @@ class MixerTests(unittest.TestCase):
         self.assertTrue(settings["enabled"])
         self.assertEqual(settings["interactions"]["hurt"], {"on": True, "strength": .2, "feel": "thud"})
         self.assertNotIn("bogus", settings["interactions"])
-        self.assertEqual(settings["devices"]["Lovense Hush"], {"on": False, "strength": .5, "all_motors": False})
+        self.assertEqual(settings["devices"]["Lovense Hush"], {"on": False, "strength": .5})
+
+    def test_device_outputs_normalize_and_legacy_all_motors_survives(self):
+        settings = haptics.normalize_settings({"devices": {
+            "A": {"all_motors": True}, "B": {"outputs": {"heat": True, "light": "yes", "spray": True}}}}, CATALOG)
+        self.assertEqual(settings["devices"]["A"], {"on": True, "strength": 1., "all_motors": True})
+        self.assertEqual(settings["devices"]["B"], {"on": True, "strength": 1., "outputs": {"heat": True}})
+
+    def test_every_feel_has_a_preview_shape(self):
+        for kind, feels in CATALOG["feels"].items():
+            for feel in feels:
+                shape = haptics.preview(CATALOG, kind, feel["id"])
+                self.assertEqual(len(shape), 48)
+                self.assertTrue(all(0 <= v <= 1 for v in shape) and max(shape) > .1, feel["id"])
 
 
 def heartbeat(session="s1", seq=1, active=True, events=(), levels=None, t=10., paused=False):
@@ -354,6 +367,9 @@ class FakeIntiface:
                     reply = {"ServerInfo": {"Id": data["Id"], "ServerName": "Fake", "MessageVersion": 3, "MaxPingTime": self.max_ping}}
                 elif kind == "RequestDeviceList":
                     reply = {"DeviceList": {"Id": data["Id"], "Devices": self.devices}}
+                elif kind == "SensorReadCmd":
+                    reply = {"SensorReading": {"Id": data["Id"], "DeviceIndex": data["DeviceIndex"],
+                                               "SensorIndex": data["SensorIndex"], "SensorType": "Battery", "Data": [64]}}
                 else:
                     reply = {"Ok": {"Id": data["Id"]}}
                 ws.send(json.dumps([reply]))
@@ -435,11 +451,16 @@ class ClientTests(unittest.TestCase):
                          [(0, .4, "Vibrate"), (2, .4, "Vibrate")])
 
     def test_all_motors_and_device_strength(self):
-        self.outputs.update(self.client, .5, {"Lovense Edge": {"on": True, "strength": .5, "all_motors": True}}, 0.)
+        # Legacy "All motors" adds suction, which eases in instead of jumping with the mix.
+        options = {"Lovense Edge": {"on": True, "strength": .5, "all_motors": True}}
+        self.outputs.update(self.client, .5, options, 0.)
         self.settle()
         command = self.server.commands()[-1]
-        self.assertEqual([s["Index"] for s in command["Scalars"]], [0, 1, 2])
-        self.assertEqual({s["Scalar"] for s in command["Scalars"]}, {.25})
+        self.assertEqual([(s["Index"], s["Scalar"]) for s in command["Scalars"]], [(0, .25), (1, 0), (2, .25)])
+        for i in range(1, 31):
+            self.outputs.update(self.client, .5, options, i / 10)
+            self.settle()
+        self.assertEqual(self.server.commands()[-1]["Scalars"][1]["Scalar"], .25)
 
     def test_only_meaningful_changes_are_sent_and_zero_always_is(self):
         self.outputs.update(self.client, .4, {}, 0.)

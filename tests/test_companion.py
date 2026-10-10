@@ -19,7 +19,7 @@ from websockets.exceptions import ConnectionClosed
 from websockets.sync.server import serve
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "companion"
-sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "reference"))
 import buttplug  # noqa: E402
 import haptics  # noqa: E402
 import nch  # noqa: E402

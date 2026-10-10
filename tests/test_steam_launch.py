@@ -19,7 +19,7 @@ import unittest
 from unittest import mock
 
 
-SCRIPT = Path(__file__).resolve().parents[1] / "tools/nch-steam-launch"
+SCRIPT = Path(__file__).resolve().parents[1] / "tests/reference/steam_launch.py"
 SPEC = importlib.util.spec_from_loader("nch_steam_launch", SourceFileLoader("nch_steam_launch", str(SCRIPT)))
 launcher = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(launcher)

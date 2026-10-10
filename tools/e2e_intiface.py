@@ -3,7 +3,7 @@
 
 Runs everything inside a private network namespace (`unshare -rn`), so it never
 touches real ports, Bluetooth or a running game/test rig. Path of the signal:
-fake CET heartbeat -> nch.py companion -> Intiface Engine -> simulated device.
+fake CET heartbeat -> Rust companion -> Intiface Engine -> simulated device.
 
     .venv/bin/python tools/e2e_intiface.py            # writes reports/e2e-intiface-<date>.json
 """
@@ -21,11 +21,12 @@ import time
 import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "src/companion"))
-import nch  # noqa: E402
-
-# Uses the engine the app would use (NCH_INTIFACE_ENGINE, the app's download, PATH).
-ENGINE = nch.Engine().executable() or Path("intiface-engine")
+# Uses the same engine search order as the native app.
+data = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local/share")) / "night-city-haptics"
+candidates = [os.environ.get("NCH_INTIFACE_ENGINE", ""),
+              str(data / "intiface-engine-5.0.4/intiface-engine"),
+              str(ROOT / "src/companion/intiface-engine"), shutil.which("intiface-engine") or ""]
+ENGINE = next((Path(p) for p in candidates if p and Path(p).is_file() and os.access(p, os.X_OK)), Path("intiface-engine"))
 
 
 def received_since(receipt, sequence):
@@ -93,7 +94,7 @@ def inner():
               "--user-device-config-file", ROOT / "tools/virtual-device-config.json", "--log", "warn")
         time.sleep(1)
         start(sys.executable, ROOT / "tools/virtual_device.py", "--port", 19875, "--state-file", received, "--mod-dir", mod)
-        start(sys.executable, ROOT / "src/companion/nch.py", "--mod-dir", mod, "--settings", work / "settings.json", "--no-browser")
+        start(ROOT / "src/companion/night-city-haptics", "--mod-dir", mod, "--settings", work / "settings.json", "--no-browser")
         deadline = time.monotonic() + 20
         state = {}
         while time.monotonic() < deadline:
@@ -171,8 +172,8 @@ def main():
         raise SystemExit(output.stdout + output.stderr)
     result = json.loads(line)
     result["date"] = time.strftime("%Y-%m-%d %H:%M:%S")
-    report = ROOT / "reports" / f"e2e-intiface-{time.strftime('%Y%m%d')}.json"
-    report.parent.mkdir(exist_ok=True)
+    report = Path(os.environ.get("NCH_E2E_REPORT", str(ROOT / "reports" / f"e2e-intiface-{time.strftime('%Y%m%d')}.json")))
+    report.parent.mkdir(parents=True, exist_ok=True)
     report.write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result["checks"], indent=1))
     print("PASSED" if result.get("passed") else "FAILED", "->", report)

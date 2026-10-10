@@ -10,9 +10,9 @@ import tempfile
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 MOD = Path("bin/x64/plugins/cyber_engine_tweaks/mods/nightCityHaptics")
-REQUIRED = {"init.lua", "companion/nch.py", "companion/haptics.py", "companion/buttplug.py",
+REQUIRED = {"init.lua", "companion/night-city-haptics", "companion/night-city-haptics.exe",
             "companion/catalog.json", "companion/ui.html", "companion/start.sh", "companion/start.cmd",
             "companion/fonts/archivo.woff2", "companion/fonts/OFL.txt"}
 
@@ -42,7 +42,7 @@ def main(argv=None):
             for source in sorted(source_dir.rglob("*")):
                 if source.is_symlink():
                     raise RuntimeError(f"Payload must not contain symlinks: {source}")
-                if not source.is_file() or source.suffix not in (".lua", ".json", ".py", ".txt", ".sh", ".cmd", ".html", ".woff2"):
+                if not source.is_file() or (target_dir / source.relative_to(source_dir)).relative_to(MOD).as_posix() not in REQUIRED:
                     continue
                 if "__pycache__" in source.parts or source.name in ("state.json", "status.json", "settings.json"):
                     continue
@@ -70,7 +70,7 @@ def main(argv=None):
                 info = zipfile.ZipInfo(rel, (2026, 10, 9, 0, 0, 0))
                 info.compress_type = zipfile.ZIP_DEFLATED
                 info.create_system = 3
-                info.external_attr = (0o100755 if rel.endswith((".sh", "nch.py")) else 0o100644) << 16
+                info.external_attr = (0o100755 if rel.endswith((".sh", "/night-city-haptics")) else 0o100644) << 16
                 archive.writestr(info, (staging / rel).read_bytes())
         with zipfile.ZipFile(candidate) as archive:
             if archive.testzip() is not None or set(archive.namelist()) != set(files):

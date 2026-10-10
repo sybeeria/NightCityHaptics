@@ -1,0 +1,25 @@
+[package]
+name = "night-city-haptics"
+version = "0.4.0"
+edition = "2021"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
+tungstenite = "0.28"
+url = "2"
+sha2 = "0.10"
+ureq = "3"
+zip = { version = "4", default-features = false, features = ["deflate"] }
+ctrlc = { version = "3", features = ["termination"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+signal-hook = "0.3"
+
+[profile.release]
+strip = true
+debug = false
+lto = "thin"
+codegen-units = 1

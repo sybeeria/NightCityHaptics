@@ -30,7 +30,7 @@ app uses that instead.
    the CET overlay.
 
 **Optional, Steam on Linux/SteamOS:** to start the app with the game, save
-[nch-steam-launch](https://raw.githubusercontent.com/sybeeria/NightCityHaptics/main/tools/nch-steam-launch)
+[nch-steam-launch](https://raw.githubusercontent.com/sybeeria/NightCityHaptics/v0.3.0/tools/nch-steam-launch)
 in the game folder and set the game's Launch Options to:
 
 ```sh
@@ -156,12 +156,15 @@ GetMod("nightCityHaptics").Pulse(0.8, 2)   -- strength 0–1, optional seconds
 
 ## Development
 
-The CET mod only reads the game and writes `state.json`. The companion (`nch.py`, standard library
-only) mixes that into device output over the Buttplug protocol. It stops when the game's heartbeat
-does.
+The current source is the unreleased 0.4.0 Rust companion. The CET mod writes `state.json`; the
+native companion mixes device output over the Buttplug protocol and stops when the game's heartbeat
+does. Rust is required to build it; Python and `websockets` are used for tooling and reference tests.
 
 ```sh
 luajit tests/cet_harness.lua
+cargo test --manifest-path rust/Cargo.toml
+cargo build --manifest-path rust/Cargo.toml --examples
+python3 tools/build_native.py                       # Linux + Windows (cargo-xwin required)
 python3 -m pip install 'websockets>=15,<17'          # tests only
 python3 -m unittest discover -s tests
 python3 tools/build.py --output-dir .build/candidate
@@ -170,6 +173,7 @@ python3 tools/e2e_intiface.py                        # Linux: real Intiface Engi
 
 ## Status
 
-Version 0.3.0. Gameplay, scene timing and physical devices still need wider playtesting.
+Latest release: 0.3.0. Current source: 0.4.0 (unreleased), with native Windows and Linux companions.
+Gameplay, scene timing, physical devices and Windows runtime still need playtesting.
 
 Built on [Buttplug / Intiface](https://buttplug.io) by Nonpolynomial.

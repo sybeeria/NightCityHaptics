@@ -13,7 +13,7 @@ import unittest
 from unittest import mock
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "companion"
-sys.path.insert(0, str(SRC))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "reference"))
 import buttplug
 import haptics
 import nch

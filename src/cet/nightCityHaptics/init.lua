@@ -1,4 +1,4 @@
--- Night City Haptics 0.3.0 (CET part)
+-- Night City Haptics 0.4.0 (CET part)
 -- Reports what happens in the game to the Night City Haptics companion app by
 -- sampling about 30 times a second and writing state.json on changes/events or
 -- at a quiet 5 Hz heartbeat. The companion owns
@@ -30,7 +30,7 @@
 -- psmImports.script:741 gamePSMMeleeWeapon Hold/ChargedHold (charged melee);
 -- blackboardDefinitions.script:753 Vehicle.RPMValue/RPMMax (car_hud.script:186, vcar_controller.script:158).
 -- Scene facts and timings checked against current vanilla .scene files.
-local mod = {version = "0.3.0"}
+local mod = {version = "0.4.0"}
 local R = {
   session = "", seq = 0, clock = 0, sampleClock = 0, writeClock = 0, overlay = false,
   loading = false, paused = false, shutdown = false, active = false, reason = "starting",

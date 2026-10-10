@@ -22,7 +22,7 @@ class BuildTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name) / "repo"
         self.sensor = self.root / "src/cet/nightCityHaptics/init.lua"
-        self.companion = self.root / "src/companion/nch.py"
+        self.companion = self.root / "src/companion/night-city-haptics"
         for rel in builder.REQUIRED:
             path = self.root / ("src/cet/nightCityHaptics" if rel == "init.lua" else "src") / rel
             path.parent.mkdir(parents=True, exist_ok=True)

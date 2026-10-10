@@ -32,7 +32,7 @@ from urllib.parse import urlsplit
 import webbrowser
 import zipfile
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parents[2] / "src/companion"
 sys.path.insert(0, str(HERE))
 import buttplug  # noqa: E402
 import haptics  # noqa: E402

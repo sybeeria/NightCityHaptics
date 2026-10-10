@@ -10,3 +10,7 @@ status.json
 *.log
 .env
 .env.*
+
+/rust/target/
+/src/companion/night-city-haptics
+/src/companion/night-city-haptics.exe

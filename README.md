@@ -168,5 +168,5 @@ python3 -m unittest discover -s tests
 python3 tools/e2e_intiface.py      # Linux: real Intiface Engine + simulated toy
 ```
 
-Not yet tested on real toys or on Windows. Built on [Buttplug / Intiface](https://buttplug.io)
+Built on [Buttplug / Intiface](https://buttplug.io)
 by Nonpolynomial.
